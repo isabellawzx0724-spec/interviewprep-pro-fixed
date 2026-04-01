@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: interview-navigator-api
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: "gpt-4.1-mini"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "false"
+      - key: ALLOW_LIVE_SCRAPE
+        value: "false"
+      - key: PLAYWRIGHT_HEADLESS
+        value: "true"
+      - key: SCRAPE_TIMEOUT_MS
+        value: "15000"
+      - key: NOWCODER_COOKIE
+        sync: false
+      - key: XIAOHONGSHU_COOKIE
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false
+      - key: NODE_VERSION
+        value: "22"
