@@ -5,6 +5,7 @@ const HIGH_QUALITY_SCORE = 38
 const MAX_RESULTS = 8
 const MAX_EXCLUDED = 8
 const DETAIL_PAGE_TYPES = new Set(['post', 'discussion', 'detail'])
+const CHINESE_SOURCES = new Set(['Nowcoder', 'Xiaohongshu'])
 const INTERVIEW_TERMS = ['面经', '面试', '一面', '二面', '三面', 'hr面', '业务面', '终面', 'offer', '总结', '复盘']
 const ROUND_TERMS = ['一面', '二面', '三面', '四面', 'hr面', '业务面', '专业面', '交叉面', '终面', '群面', '无领导']
 const CONTENT_TERMS = ['问了', '问题', '回答', '流程', '自我介绍', '深挖', '追问', 'case', '反问', '笔试', '群面', '终面']
@@ -15,8 +16,8 @@ const COMPANY_ALIAS_RULES = [
 
 const ROLE_ALIAS_RULES = [
   {
-    test: /business development|商务拓展|商务发展|\bbd\b/i,
-    aliases: ['商务拓展', 'BD', '商务拓展实习', '商务拓展实习生', 'BD实习', 'Business Development']
+    test: /business development intern|business development|商务拓展实习|商务拓展|商业拓展|商务发展|\bbd\b/i,
+    aliases: ['商务拓展', '商务拓展实习', '商务拓展实习生', '商业拓展', 'BD', 'BD实习', 'Business Development']
   },
   {
     test: /product operations|产品运营/i,
@@ -24,7 +25,7 @@ const ROLE_ALIAS_RULES = [
   },
   {
     test: /product manager|产品经理|\bpm\b/i,
-    aliases: ['产品经理', 'PM', '产品经理实习', 'Product Manager']
+    aliases: ['产品经理', '产品经理实习', 'PM', 'Product Manager']
   },
   {
     test: /marketing|市场|营销/i,
@@ -66,6 +67,27 @@ const REJECT_TITLE_RULES = [
   { pattern: /登录|注册|验证码|扫码/i, reason: 'login-title' }
 ]
 
+const runtimeState = {
+  Nowcoder: {
+    source: 'Nowcoder',
+    cookieValid: 'unknown',
+    lastError: '',
+    lastCheckedAt: '',
+    authenticatedLikely: false,
+    cookieInjectedLastRun: false,
+    searchRewriteEnabled: true
+  },
+  Xiaohongshu: {
+    source: 'Xiaohongshu',
+    cookieValid: 'unknown',
+    lastError: '',
+    lastCheckedAt: '',
+    authenticatedLikely: false,
+    cookieInjectedLastRun: false,
+    searchRewriteEnabled: true
+  }
+}
+
 function toNumber(value, fallback) {
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
@@ -81,6 +103,14 @@ function normalizeKey(value = '') {
 
 function containsChinese(value = '') {
   return /[\u4e00-\u9fa5]/.test(value)
+}
+
+function detectLanguage(value = '') {
+  if (containsChinese(value)) {
+    return /[a-zA-Z]/.test(value) ? 'mixed' : 'zh'
+  }
+  if (/[a-zA-Z]/.test(value)) return 'en'
+  return 'unknown'
 }
 
 function uniqueStrings(values = [], limit = Infinity) {
@@ -133,7 +163,7 @@ function expandAliases(value = '', rules = []) {
 
 function stripRoleDecorators(role = '') {
   return normalizeSpace(role)
-    .replace(/\b(intern(ship)?|summer|full[- ]?time)\b/ig, '')
+    .replace(/\b(intern(ship)?|summer|full[- ]?time|graduate)\b/ig, '')
     .replace(/实习生?|校招|岗位/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -160,6 +190,10 @@ function buildTypeAliases(interviewType = '') {
   return uniqueStrings(aliases)
 }
 
+function composeOriginalQuery({ company = '', role = '', interviewType = '' } = {}) {
+  return normalizeSpace([company, role, interviewType, 'interview experience'].filter(Boolean).join(' '))
+}
+
 export function buildSourceSearchUrl(source, query = '') {
   const normalizedSource = canonicalSource(source)
   const encoded = encodeURIComponent(normalizeSpace(query))
@@ -176,9 +210,11 @@ export function buildSourceSearchUrl(source, query = '') {
 }
 
 export function buildSearchPlan({ company = '', role = '', interviewType = '' } = {}) {
+  const originalQuery = composeOriginalQuery({ company, role, interviewType })
   const rawCompany = normalizeSpace(company)
   const rawRole = normalizeSpace(role)
   const strippedRole = stripRoleDecorators(rawRole)
+  const inputLanguage = detectLanguage(originalQuery || `${rawCompany} ${rawRole}`)
   const companyAliases = uniqueStrings([
     ...expandAliases(rawCompany, COMPANY_ALIAS_RULES),
     rawCompany.length < 2 ? '大厂' : ''
@@ -192,7 +228,7 @@ export function buildSearchPlan({ company = '', role = '', interviewType = '' } 
   const typeAliases = buildTypeAliases(interviewType)
   const primaryCompany = firstChinese(companyAliases) || companyAliases[0] || '大厂'
   const primaryRole = firstChinese(roleAliases) || roleAliases[0] || '实习'
-  const shortRole = roleAliases.find((item) => /^(BD|PM)$/i.test(item) || /商务拓展|产品运营|产品经理|市场|营销|战略|数据分析/.test(item)) || primaryRole
+  const shortRole = roleAliases.find((item) => /^(BD|PM)$/i.test(item) || /商务拓展|商业拓展|产品运营|产品经理|市场|营销|战略|数据分析/.test(item)) || primaryRole
   const hasIntern = detectIntern(rawRole)
   const roleVariants = uniqueStrings([
     primaryRole,
@@ -213,8 +249,8 @@ export function buildSearchPlan({ company = '', role = '', interviewType = '' } 
     `${primaryCompany} ${shortRole} 面试`,
     primaryType ? `${primaryCompany} ${primaryRole} ${primaryType}` : '',
     `${primaryCompany} ${primaryRole} 牛客`,
-    rawCompany && rawRole ? `${rawCompany} ${rawRole} interview` : ''
-  ], 6)
+    originalQuery
+  ], 5)
 
   const xiaohongshuQueries = uniqueStrings([
     `${primaryCompany} ${roleVariants[0] || primaryRole} 面经`,
@@ -222,10 +258,33 @@ export function buildSearchPlan({ company = '', role = '', interviewType = '' } 
     `${primaryCompany} ${primaryRole} 复盘`,
     primaryType ? `${primaryCompany} ${primaryRole} ${primaryType}` : '',
     `${primaryCompany} ${primaryRole} 小红书`,
-    rawCompany && rawRole ? `${rawCompany} ${rawRole} interview` : ''
-  ], 6)
+    originalQuery
+  ], 5)
+
+  const sourcePlans = {
+    Nowcoder: {
+      source: 'Nowcoder',
+      sourceLanguage: CHINESE_SOURCES.has('Nowcoder') ? 'zh' : inputLanguage,
+      inputLanguage,
+      originalQuery,
+      normalizedQueries: nowcoderQueries,
+      displayQuery: nowcoderQueries[0] || originalQuery,
+      usedQueryRewrite: CHINESE_SOURCES.has('Nowcoder') && normalizeKey(nowcoderQueries[0] || '') !== normalizeKey(originalQuery || '')
+    },
+    Xiaohongshu: {
+      source: 'Xiaohongshu',
+      sourceLanguage: CHINESE_SOURCES.has('Xiaohongshu') ? 'zh' : inputLanguage,
+      inputLanguage,
+      originalQuery,
+      normalizedQueries: xiaohongshuQueries,
+      displayQuery: xiaohongshuQueries[0] || originalQuery,
+      usedQueryRewrite: CHINESE_SOURCES.has('Xiaohongshu') && normalizeKey(xiaohongshuQueries[0] || '') !== normalizeKey(originalQuery || '')
+    }
+  }
 
   return {
+    rawInput: { company: rawCompany, role: rawRole, interviewType: normalizeSpace(interviewType), originalQuery },
+    inputLanguage,
     companyAliases,
     roleAliases,
     typeAliases,
@@ -235,6 +294,7 @@ export function buildSearchPlan({ company = '', role = '', interviewType = '' } 
       Nowcoder: nowcoderQueries,
       Xiaohongshu: xiaohongshuQueries
     },
+    sourcePlans,
     warnings
   }
 }
@@ -343,29 +403,13 @@ function rankCandidate(candidate, searchPlan) {
     why.push(`URL 更像${pageType}详情页`)
   }
 
-  if (source === 'Nowcoder' && /nowcoder\.com\/(discuss|discussion|feed\/main\/detail)/i.test(url)) {
-    score += 6
-  }
+  if (source === 'Nowcoder' && /nowcoder\.com\/(discuss|discussion|feed\/main\/detail)/i.test(url)) score += 6
+  if (source === 'Xiaohongshu' && /xiaohongshu\.com\/(explore|discovery\/item)/i.test(url)) score += 6
+  if ((companyHits.length || roleHits.length) && (companyHits.some(containsChinese) || roleHits.some(containsChinese))) score += 4
 
-  if (source === 'Xiaohongshu' && /xiaohongshu\.com\/(explore|discovery\/item)/i.test(url)) {
-    score += 6
-  }
-
-  if ((companyHits.length || roleHits.length) && (companyHits.some(containsChinese) || roleHits.some(containsChinese))) {
-    score += 4
-  }
-
-  if (!companyHits.length && !roleHits.length) {
-    rejectReasons.push('missing-company-or-role-signal')
-  }
-
-  if (!semanticHits.length && !roundHits.length) {
-    rejectReasons.push('missing-interview-semantic')
-  }
-
-  if (!DETAIL_PAGE_TYPES.has(pageType)) {
-    rejectReasons.push('not-detail-page')
-  }
+  if (!companyHits.length && !roleHits.length) rejectReasons.push('missing-company-or-role-signal')
+  if (!semanticHits.length && !roundHits.length) rejectReasons.push('missing-interview-semantic')
+  if (!DETAIL_PAGE_TYPES.has(pageType)) rejectReasons.push('not-detail-page')
 
   const uniqueRejectReasons = uniqueStrings(rejectReasons, 6)
   const whyMatched = uniqueStrings(why, 3).join('；')
@@ -383,7 +427,8 @@ function rankCandidate(candidate, searchPlan) {
     pageType,
     whyMatched,
     rejectReasons: uniqueRejectReasons,
-    isHighQuality
+    isHighQuality,
+    kind: 'direct'
   }
 }
 
@@ -414,13 +459,49 @@ function summarizeExcluded(items = []) {
   }))
 }
 
+function inferCookieValidity(cookieConfigured, diagnostics) {
+  if (!cookieConfigured) return 'false'
+  if (!diagnostics) return 'unknown'
+  if (diagnostics.loginDetected) return 'false'
+  if (diagnostics.authenticatedLikely) return 'true'
+  if (diagnostics.antiBotDetected) return 'unknown'
+  return 'unknown'
+}
+
+function updateRuntimeStatus(source, config, diagnostics = null, errorMessage = '') {
+  const runtime = runtimeState[source] || {
+    source,
+    cookieValid: 'unknown',
+    lastError: '',
+    lastCheckedAt: '',
+    authenticatedLikely: false,
+    cookieInjectedLastRun: false,
+    searchRewriteEnabled: true
+  }
+
+  runtimeState[source] = {
+    ...runtime,
+    lastCheckedAt: new Date().toISOString(),
+    lastError: errorMessage || diagnostics?.lastError || '',
+    authenticatedLikely: Boolean(diagnostics?.authenticatedLikely),
+    cookieInjectedLastRun: Boolean(diagnostics?.cookieInjected),
+    cookieValid: diagnostics ? inferCookieValidity(source === 'Nowcoder' ? config.hasNowcoderCookie : config.hasXiaohongshuCookie, diagnostics) : runtime.cookieValid,
+    searchRewriteEnabled: CHINESE_SOURCES.has(source),
+    candidateCount: Number(diagnostics?.candidateCount || 0),
+    loginDetected: Boolean(diagnostics?.loginDetected),
+    antiBotDetected: Boolean(diagnostics?.antiBotDetected)
+  }
+}
+
 function buildStatus({ config, warnings = [], rawCandidateCount = 0, highQualityCount = 0, excluded = [] }) {
   const lowerWarnings = warnings.map((item) => normalizeKey(item))
 
   if (!config.enabled) return 'disabled'
-  if (!config.hasNowcoderCookie || !config.hasXiaohongshuCookie) return 'cookie-missing'
   if (lowerWarnings.some((item) => item.includes('anti-bot') || item.includes('captcha') || item.includes('验证'))) return 'anti-bot'
   if (lowerWarnings.some((item) => item.includes('timeout'))) return 'timeout'
+  if (highQualityCount) return 'ok'
+  if (!config.hasNowcoderCookie && !config.hasXiaohongshuCookie) return 'cookie-missing'
+  if (!config.hasNowcoderCookie || !config.hasXiaohongshuCookie) return 'cookie-partial'
   if (!rawCandidateCount) return 'no-candidates'
   if (!highQualityCount) {
     const navigationOnly = excluded.some((item) => item.rejectReasons.some((reason) => ['interview-center-page', 'ai-interview-page', 'product-page', 'search-results-page', 'landing-or-product-title'].includes(reason)))
@@ -434,7 +515,9 @@ export function buildScrapeNextStep(result) {
     case 'disabled':
       return 'ALLOW_LIVE_SCRAPE 还是 false，请先打开实时抓取。'
     case 'cookie-missing':
-      return '至少有一个站点的 cookie 没读到，请重新复制浏览器里完整 Cookie 到环境变量。'
+      return '两个中文站点的 cookie 都没有读到，请重新复制浏览器里完整 Cookie 到环境变量。'
+    case 'cookie-partial':
+      return '至少有一个中文站点还没有可用 cookie。先看 crawler status，确认是缺失还是已失效。'
     case 'anti-bot':
       return '站点很可能触发了反爬或登录校验，先刷新 Cookie，再尝试 PLAYWRIGHT_HEADLESS=false 本地调试。'
     case 'timeout':
@@ -460,7 +543,59 @@ export function getScrapeConfig() {
     headless: process.env.PLAYWRIGHT_HEADLESS !== 'false',
     timeoutMs: toNumber(process.env.SCRAPE_TIMEOUT_MS, 15000),
     hasNowcoderCookie: Boolean(process.env.NOWCODER_COOKIE),
-    hasXiaohongshuCookie: Boolean(process.env.XIAOHONGSHU_COOKIE)
+    hasXiaohongshuCookie: Boolean(process.env.XIAOHONGSHU_COOKIE),
+    chineseQueryRewriteEnabled: true
+  }
+}
+
+export function getCrawlerStatus() {
+  const config = getScrapeConfig()
+  const sources = [
+    {
+      key: 'nowcoder',
+      source: 'Nowcoder',
+      crawlerEnabled: config.enabled,
+      cookieConfigured: config.hasNowcoderCookie,
+      cookieValid: config.hasNowcoderCookie ? runtimeState.Nowcoder.cookieValid : 'false',
+      cookieInjectedLastRun: runtimeState.Nowcoder.cookieInjectedLastRun,
+      authenticatedLikely: runtimeState.Nowcoder.authenticatedLikely,
+      loginDetected: Boolean(runtimeState.Nowcoder.loginDetected),
+      antiBotDetected: Boolean(runtimeState.Nowcoder.antiBotDetected),
+      candidateCount: Number(runtimeState.Nowcoder.candidateCount || 0),
+      lastError: runtimeState.Nowcoder.lastError,
+      lastCheckedAt: runtimeState.Nowcoder.lastCheckedAt,
+      searchRewriteEnabled: true
+    },
+    {
+      key: 'xiaohongshu',
+      source: 'Xiaohongshu',
+      crawlerEnabled: config.enabled,
+      cookieConfigured: config.hasXiaohongshuCookie,
+      cookieValid: config.hasXiaohongshuCookie ? runtimeState.Xiaohongshu.cookieValid : 'false',
+      cookieInjectedLastRun: runtimeState.Xiaohongshu.cookieInjectedLastRun,
+      authenticatedLikely: runtimeState.Xiaohongshu.authenticatedLikely,
+      loginDetected: Boolean(runtimeState.Xiaohongshu.loginDetected),
+      antiBotDetected: Boolean(runtimeState.Xiaohongshu.antiBotDetected),
+      candidateCount: Number(runtimeState.Xiaohongshu.candidateCount || 0),
+      lastError: runtimeState.Xiaohongshu.lastError,
+      lastCheckedAt: runtimeState.Xiaohongshu.lastCheckedAt,
+      searchRewriteEnabled: true
+    }
+  ]
+
+  return {
+    crawlerEnabled: config.enabled,
+    chineseQueryRewriteEnabled: true,
+    sources
+  }
+}
+
+function logSourcePlan(searchPlan) {
+  for (const source of Object.keys(searchPlan.sourcePlans || {})) {
+    const plan = searchPlan.sourcePlans[source]
+    console.info(
+      `[scrape] source=${source} inputLanguage=${plan.inputLanguage} original="${plan.originalQuery}" normalized="${(plan.normalizedQueries || []).join(' | ')}" rewrite=${plan.usedQueryRewrite}`
+    )
   }
 }
 
@@ -485,7 +620,8 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
         filteredCount: 0,
         excludedTop: [],
         sourceDiagnostics: []
-      }
+      },
+      crawlerStatus: getCrawlerStatus()
     }
     result.debug.nextStep = buildScrapeNextStep(result)
     return result
@@ -493,6 +629,8 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
 
   if (!config.hasNowcoderCookie) initialWarnings.push('Nowcoder cookie missing')
   if (!config.hasXiaohongshuCookie) initialWarnings.push('Xiaohongshu cookie missing')
+
+  logSourcePlan(searchPlan)
 
   const [nowcoder, xiaohongshu] = await Promise.allSettled([
     scrapeNowcoder({
@@ -520,13 +658,17 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
   for (const settled of [nowcoder, xiaohongshu]) {
     if (settled.status === 'fulfilled') {
       rawResults.push(...(settled.value.results || []))
-      if (settled.value.diagnostics) sourceDiagnostics.push(settled.value.diagnostics)
+      if (settled.value.diagnostics) {
+        sourceDiagnostics.push(settled.value.diagnostics)
+        updateRuntimeStatus(settled.value.diagnostics.source, config, settled.value.diagnostics)
+      }
       if (Array.isArray(settled.value.diagnostics?.warnings)) warnings.push(...settled.value.diagnostics.warnings)
     } else {
       const message = settled.reason?.message || 'unknown error'
       const source = settled.reason?.source || 'Scraper'
       console.warn(`[scrape] ${source} failed: ${message}`)
       warnings.push(`${source} scrape failed: ${message}`)
+      updateRuntimeStatus(source, config, settled.reason?.diagnostics, message)
       if (settled.reason?.diagnostics) sourceDiagnostics.push(settled.reason.diagnostics)
     }
   }
@@ -561,7 +703,8 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
       excludedTop: summarizeExcluded(excluded),
       sourceDiagnostics,
       qualityThreshold: HIGH_QUALITY_SCORE
-    }
+    },
+    crawlerStatus: getCrawlerStatus()
   }
 
   result.debug.nextStep = buildScrapeNextStep(result)

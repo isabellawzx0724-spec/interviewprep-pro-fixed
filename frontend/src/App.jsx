@@ -22,6 +22,13 @@ const defaultFeedback = {
   notes: ''
 }
 
+const defaultBootstrap = {
+  feedbackCount: 0,
+  recentSessions: [],
+  storage: null,
+  crawlerStatus: null
+}
+
 function escapeHtml(value = '') {
   return String(value)
     .replace(/&/g, '&amp;')
@@ -137,6 +144,67 @@ function downloadCheatSheetDoc({ form, pack, resumeProfile }) {
   URL.revokeObjectURL(url)
 }
 
+function formatTime(value, language = 'zh') {
+  if (!value) return '—'
+  try {
+    return new Date(value).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US')
+  } catch {
+    return value
+  }
+}
+
+function buildRewriteRows(scrapeState) {
+  return Object.values(scrapeState?.searchPlan?.sourcePlans || {})
+    .filter((plan) => plan?.displayQuery)
+    .map((plan) => ({
+      source: plan.source,
+      original: plan.originalQuery || '',
+      rewritten: plan.displayQuery || '',
+      usedQueryRewrite: Boolean(plan.usedQueryRewrite)
+    }))
+    .filter((item) => item.original || item.rewritten)
+}
+
+function describeCrawlerSource(source, t) {
+  if (!source?.crawlerEnabled) {
+    return {
+      tone: 'warning',
+      headline: t.evidencePage.crawlerDisabled,
+      helper: t.prepPage.scrapeDisabled
+    }
+  }
+
+  if (!source.cookieConfigured) {
+    return {
+      tone: 'warning',
+      headline: t.evidencePage.cookieMissing,
+      helper: t.evidencePage.fallbackMode
+    }
+  }
+
+  if (source.cookieValid === 'true') {
+    return {
+      tone: 'success',
+      headline: t.evidencePage.cookieReady,
+      helper: t.evidencePage.crawlerEnabled
+    }
+  }
+
+  if (source.cookieValid === 'false') {
+    return {
+      tone: 'danger',
+      headline: t.evidencePage.cookieInvalid,
+      helper: source.lastError || t.evidencePage.fallbackMode
+    }
+  }
+
+  return {
+    tone: 'warning',
+    headline: t.evidencePage.cookieUnknown,
+    helper: source.antiBotDetected ? 'anti-bot detected' : t.evidencePage.fallbackMode
+  }
+}
+
 function ShellCard({ title, subtitle, children, actions }) {
   return (
     <section className="shell-card">
@@ -227,6 +295,47 @@ function ResumePreview({ t, resumeProfile, compact = false }) {
   )
 }
 
+function SourceStatusCard({ source, t, language }) {
+  const meta = describeCrawlerSource(source, t)
+
+  return (
+    <article className={`source-status-card ${meta.tone}`}>
+      <div className="source-status-top">
+        <strong>{source.source}</strong>
+        <span className={`pill ${meta.tone === 'success' ? 'solid' : meta.tone === 'danger' ? 'danger' : 'subtle'}`}>{meta.headline}</span>
+      </div>
+      <p>{meta.helper}</p>
+      <div className="source-status-meta">
+        <span>{t.evidencePage.sourceCount}: {source.candidateCount ?? 0}</span>
+        <span>{t.evidencePage.lastChecked}: {formatTime(source.lastCheckedAt, language)}</span>
+      </div>
+      {source.lastError ? <small>{t.evidencePage.lastError}: {source.lastError}</small> : null}
+    </article>
+  )
+}
+
+function RewriteNote({ rows, t }) {
+  if (!rows.length) return null
+
+  return (
+    <div className="rewrite-panel">
+      <h5>{t.evidencePage.searchRewriteTitle}</h5>
+      <div className="rewrite-list">
+        {rows.map((row) => (
+          <article key={row.source} className="rewrite-item">
+            <div className="rewrite-item-head">
+              <strong>{row.source}</strong>
+              {row.usedQueryRewrite ? <span className="pill solid">ZH</span> : <span className="pill subtle">raw</span>}
+            </div>
+            <p><span className="mini-label">{t.evidencePage.originalQuery}</span>{row.original || '—'}</p>
+            <p><span className="mini-label">{t.evidencePage.rewrittenQuery}</span>{row.rewritten || row.original || '—'}</p>
+          </article>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function DashboardPage({ t, pack, insights, bootstrap }) {
   const fitScore = pack?.fitReview?.overallScore ?? '—'
 
@@ -271,6 +380,7 @@ function DashboardPage({ t, pack, insights, bootstrap }) {
 
 function ResumePage({ t, form, setForm, resumeProfile, setResumeProfile, resumePaste, setResumePaste, parseError, setParseError }) {
   const [uploading, setUploading] = useState(false)
+  const [dragging, setDragging] = useState(false)
 
   async function uploadFile(file) {
     if (!file) return
@@ -291,6 +401,7 @@ function ResumePage({ t, form, setForm, resumeProfile, setResumeProfile, resumeP
       setParseError(error.message || t.errors.parse)
     } finally {
       setUploading(false)
+      setDragging(false)
     }
   }
 
@@ -317,100 +428,154 @@ function ResumePage({ t, form, setForm, resumeProfile, setResumeProfile, resumeP
   }
 
   return (
-    <div className="page-grid two-column">
-      <ShellCard title={t.resumePage.title} subtitle={t.resumePage.subtitle}>
-        <div className="resume-intake">
-          <label className="upload-box hero-upload">
-            <span>{t.uploadResume}</span>
-            <small>{t.helperUpload}</small>
-            <input type="file" accept=".pdf,.doc,.docx,.txt" onChange={(e) => uploadFile(e.target.files?.[0])} />
-          </label>
+    <div className="page-grid one-column">
+      <div className="resume-shell">
+        <div className="resume-main">
+          <ShellCard title={t.resumePage.title} subtitle={t.resumePage.subtitle}>
+            <div className="resume-intake">
+              <label
+                className={`upload-box hero-upload ${dragging ? 'dragging' : ''}`}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  setDragging(true)
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  setDragging(false)
+                  uploadFile(event.dataTransfer.files?.[0])
+                }}
+              >
+                <span>{resumeProfile ? t.resumePage.replaceResume : t.uploadResume}</span>
+                <small>{t.helperUpload}</small>
+                <strong className="upload-hint">{t.resumePage.dragHint}</strong>
+                <input type="file" accept=".pdf,.doc,.docx,.txt" onChange={(e) => uploadFile(e.target.files?.[0])} />
+              </label>
 
-          {resumeProfile ? (
-            <div className="mini-stats-grid">
-              <MiniStat label={t.resumePage.statsSkills} value={resumeProfile.stats?.skillCount ?? resumeProfile.skills?.length ?? 0} />
-              <MiniStat label={t.resumePage.statsHighlights} value={resumeProfile.stats?.highlightCount ?? resumeProfile.recommendedHighlights?.length ?? 0} />
-              <MiniStat label={t.resumePage.statsRewrite} value={resumeProfile.stats?.rewriteCount ?? resumeProfile.improvementSuggestions?.length ?? 0} />
+              {resumeProfile ? (
+                <div className="file-summary-grid">
+                  <div className="surface-panel compact-panel">
+                    <span className="mini-label">{t.resumePage.fileName}</span>
+                    <strong>{resumeProfile.fileName || '—'}</strong>
+                  </div>
+                  <div className="surface-panel compact-panel">
+                    <span className="mini-label">{t.resumePage.detectedLanguage}</span>
+                    <strong>{resumeProfile.detectedLanguage || '—'}</strong>
+                  </div>
+                  <div className="surface-panel compact-panel">
+                    <span className="mini-label">{t.resumePage.summary}</span>
+                    <strong>{resumeProfile.summary}</strong>
+                  </div>
+                </div>
+              ) : null}
+
+              {parseError ? <div className="status-banner error">{parseError}</div> : null}
             </div>
-          ) : null}
+          </ShellCard>
 
-          <div className="surface-panel">
-            <div className="surface-panel-head">
-              <strong>{t.resumePage.previewTitle}</strong>
-              {resumeProfile?.fileName ? <span className="mini-note">{resumeProfile.fileName}</span> : null}
+          <ShellCard title={t.resumePage.previewTitle} subtitle={resumeProfile?.summary || t.resumePage.previewEmpty}>
+            {resumeProfile ? (
+              <>
+                <div className="mini-stats-grid">
+                  <MiniStat label={t.resumePage.statsSkills} value={resumeProfile.stats?.skillCount ?? resumeProfile.skills?.length ?? 0} />
+                  <MiniStat label={t.resumePage.statsHighlights} value={resumeProfile.stats?.highlightCount ?? resumeProfile.recommendedHighlights?.length ?? 0} />
+                  <MiniStat label={t.resumePage.statsRewrite} value={resumeProfile.stats?.rewriteCount ?? resumeProfile.improvementSuggestions?.length ?? 0} />
+                </div>
+                <ResumePreview t={t} resumeProfile={resumeProfile} />
+              </>
+            ) : <p className="empty-copy">{t.resumePage.previewEmpty}</p>}
+          </ShellCard>
+
+          <ShellCard title={t.resumePage.storyBankTitle} subtitle={resumeProfile?.storyBank?.length ? t.resumePage.interviewSignals : t.resumePage.noStoryBank}>
+            {resumeProfile?.storyBank?.length ? (
+              <div className="story-grid">
+                {resumeProfile.storyBank.map((item) => (
+                  <article className="story-card" key={item.title}>
+                    <h4>{item.title}</h4>
+                    <p>{item.anchor}</p>
+                    <small><span className="mini-label">{t.resumePage.storyGoodFor}</span>{item.goodFor}</small>
+                    <small><span className="mini-label">{t.resumePage.storyFollowUp}</span>{item.likelyFollowUp}</small>
+                    <small><span className="mini-label">{t.resumePage.storyGap}</span>{item.detailGap}</small>
+                  </article>
+                ))}
+              </div>
+            ) : <p className="empty-copy">{t.resumePage.noStoryBank}</p>}
+          </ShellCard>
+
+          <ShellCard title={t.resumePage.rawPreview} subtitle={t.resumePage.manualHint}>
+            <div className="surface-panel raw-preview-panel">
+              <pre className="raw-preview">{resumeProfile?.rawText || resumePaste || ''}</pre>
             </div>
-            <ResumePreview t={t} resumeProfile={resumeProfile} />
-          </div>
-
-          <details className="details-panel">
-            <summary>{t.resumePage.manualTitle}</summary>
-            <p className="mini-note">{t.resumePage.manualHint}</p>
-            <textarea rows="10" value={resumePaste} onChange={(e) => setResumePaste(e.target.value)} placeholder="Paste resume text here…" />
-            <div className="actions-row details-actions">
-              <button type="button" className="secondary-button" onClick={parseText} disabled={uploading || !resumePaste.trim()}>{t.parseResume}</button>
-            </div>
-          </details>
-
-          {parseError ? <div className="status-banner error">{parseError}</div> : null}
+            <details className="details-panel">
+              <summary>{t.resumePage.manualTitle}</summary>
+              <p className="mini-note">{t.resumePage.manualHint}</p>
+              <textarea rows="10" value={resumePaste} onChange={(e) => setResumePaste(e.target.value)} placeholder="Paste resume text here…" />
+              <div className="actions-row details-actions">
+                <button type="button" className="secondary-button" onClick={parseText} disabled={uploading || !resumePaste.trim()}>{t.parseResume}</button>
+              </div>
+            </details>
+          </ShellCard>
         </div>
-      </ShellCard>
 
-      <ShellCard title={t.resumePage.parsedTitle} subtitle={resumeProfile?.summary || t.resumePage.summary}>
-        {resumeProfile ? (
-          <div className="stacked-sections">
-            <div className="summary-banner">
-              <strong>{t.resumePage.summary}</strong>
-              <p>{resumeProfile.summary}</p>
-            </div>
+        <aside className="resume-rail">
+          <div className="resume-rail-sticky">
+            <ShellCard title={t.resumePage.diagnosisTitle} subtitle={t.resumePage.coachSummary}>
+              {resumeProfile ? (
+                <div className="resume-rail-scroll">
+                  <div className="resume-diagnosis-group">
+                    <h4>{t.resumePage.topFixes}</h4>
+                    {(resumeProfile.improvementSuggestions || []).length ? (
+                      (resumeProfile.improvementSuggestions || []).map((item) => (
+                        <article className="coach-item" key={item.original}>
+                          <span className="pill danger">{item.verdict || t.resumePage.risks}</span>
+                          <strong>{item.original}</strong>
+                          <p><span className="mini-label">{t.resumePage.improveIssue}</span>{item.reason || item.issue}</p>
+                          <p><span className="mini-label">{t.resumePage.improveDirection}</span>{item.rewriteDirection}</p>
+                        </article>
+                      ))
+                    ) : <p className="empty-copy">{t.resumePage.noCoachItems}</p>}
+                  </div>
 
-            <div className="section-block">
-              <h4>{t.resumePage.skills}</h4>
-              <div className="pill-row">
-                {resumeProfile.skills?.length
-                  ? resumeProfile.skills.map((item) => <span key={item} className="pill">{item}</span>)
-                  : <span className="empty-copy">—</span>}
-              </div>
-            </div>
+                  <div className="resume-diagnosis-group">
+                    <h4>{t.resumePage.polishTitle}</h4>
+                    {(resumeProfile.polishSuggestions || []).length ? (
+                      (resumeProfile.polishSuggestions || []).map((item) => (
+                        <article className="coach-item subtle" key={item.original}>
+                          <span className="pill subtle">{item.verdict || t.resumePage.polishTitle}</span>
+                          <strong>{item.original}</strong>
+                          <p><span className="mini-label">{t.resumePage.improveIssue}</span>{item.reason || item.issue}</p>
+                          <p><span className="mini-label">{t.resumePage.improveDirection}</span>{item.rewriteDirection}</p>
+                        </article>
+                      ))
+                    ) : <p className="empty-copy">{t.resumePage.noCoachItems}</p>}
+                  </div>
 
-            <div className="section-block">
-              <h4>{t.resumePage.achievements}</h4>
-              <div className="content-grid two-up">
-                {(resumeProfile.recommendedHighlights || []).map((item) => (
-                  <article className="info-card" key={item}>
-                    <p>{item}</p>
-                  </article>
-                ))}
-              </div>
-            </div>
-
-            <div className="section-block">
-              <h4>{t.resumePage.risks}</h4>
-              <div className="content-grid two-up">
-                {(resumeProfile.improvementSuggestions || []).map((item) => (
-                  <article className="info-card" key={item.original}>
-                    <strong>{item.original}</strong>
-                    <p><span className="mini-label">{t.resumePage.improveIssue}</span>{item.issue}</p>
-                    <p><span className="mini-label">{t.resumePage.improveDirection}</span>{item.rewriteDirection}</p>
-                  </article>
-                ))}
-              </div>
-            </div>
-
-            <div className="section-block">
-              <h4>{t.resumePage.interviewSignals}</h4>
-              <ul className="bullet-list">
-                {(resumeProfile.interviewSignals || []).map((item) => <li key={item}>{item}</li>)}
-              </ul>
-            </div>
+                  <div className="resume-diagnosis-group">
+                    <h4>{t.resumePage.keepTitle}</h4>
+                    {(resumeProfile.keepSuggestions || []).length ? (
+                      (resumeProfile.keepSuggestions || []).map((item) => (
+                        <article className="coach-item keep" key={item.original}>
+                          <span className="pill solid">{item.verdict || t.resumePage.keepTitle}</span>
+                          <strong>{item.original}</strong>
+                          <p>{item.reason}</p>
+                        </article>
+                      ))
+                    ) : <p className="empty-copy">{t.resumePage.noCoachItems}</p>}
+                  </div>
+                </div>
+              ) : <p className="empty-copy">{t.noPack}</p>}
+            </ShellCard>
           </div>
-        ) : <p className="empty-copy">{t.noPack}</p>}
-      </ShellCard>
+        </aside>
+      </div>
     </div>
   )
 }
 
-function PrepPage({ t, form, setForm, resumeProfile, pack, insights, loading, generateError, onGenerate, onDownloadDoc }) {
+function PrepPage({ t, form, setForm, resumeProfile, pack, insights, scrapeState, crawlerStatus, loading, generateError, onGenerate, onDownloadDoc }) {
   const evidenceMeta = pack?.evidence?.meta
+  const currentCrawlerStatus = scrapeState?.crawlerStatus || crawlerStatus
+  const rewriteRows = buildRewriteRows(scrapeState)
 
   return (
     <div className="page-grid two-column">
@@ -461,6 +626,22 @@ function PrepPage({ t, form, setForm, resumeProfile, pack, insights, loading, ge
       >
         {!pack ? <p className="empty-copy">{t.noPack}</p> : (
           <div className="stacked-sections">
+            {(currentCrawlerStatus?.sources || []).length ? (
+              <div className="section-block">
+                <h4>{t.prepPage.sourceStatus}</h4>
+                <div className="source-status-grid compact-grid">
+                  {currentCrawlerStatus.sources.map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={form.language} />)}
+                </div>
+              </div>
+            ) : null}
+
+            {rewriteRows.length ? (
+              <div className="section-block">
+                <h4>{t.prepPage.searchRewrite}</h4>
+                <RewriteNote rows={rewriteRows} t={t} />
+              </div>
+            ) : null}
+
             <div className="section-block">
               <h4>{t.prepPage.fitTitle}</h4>
               <div className="score-strip">
@@ -508,7 +689,7 @@ function PrepPage({ t, form, setForm, resumeProfile, pack, insights, loading, ge
                 ))}</div>
               </div>
 
-              {!evidenceMeta?.directCount ? <div className="status-banner warning">{t.prepPage.scrapeDisabled}</div> : null}
+              {!evidenceMeta?.preferredDirectCount && evidenceMeta?.searchFallbackCount ? <div className="status-banner warning">{t.prepPage.scrapeDisabled}</div> : null}
               {evidenceMeta?.warnings?.length ? <div className="status-banner warning">{t.prepPage.scrapeWarnings}: {evidenceMeta.warnings.join(' | ')}</div> : null}
             </div>
 
@@ -583,31 +764,52 @@ function PrepPage({ t, form, setForm, resumeProfile, pack, insights, loading, ge
   )
 }
 
-function EvidencePage({ t, insights, pack }) {
+function EvidencePage({ t, insights, pack, scrapeState, crawlerStatus, language }) {
   const directCount = insights.filter((item) => item.referenceUrl).length
   const fallbackCount = insights.filter((item) => !item.referenceUrl && item.referenceSearchUrl).length
+  const rewriteRows = buildRewriteRows(scrapeState)
+  const currentCrawlerStatus = scrapeState?.crawlerStatus || crawlerStatus
 
   return (
     <div className="page-grid one-column">
       <ShellCard title={t.evidencePage.title} subtitle={t.evidencePage.subtitle}>
+        {(currentCrawlerStatus?.sources || []).length ? (
+          <div className="section-block">
+            <h4>{t.evidencePage.statusTitle}</h4>
+            <div className="source-status-grid">
+              {currentCrawlerStatus.sources.map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={language} />)}
+            </div>
+          </div>
+        ) : null}
+
+        {rewriteRows.length ? <RewriteNote rows={rewriteRows} t={t} /> : null}
+
+        {pack?.evidence?.meta?.warnings?.length ? <div className="status-banner warning">{t.evidencePage.warnings}: {pack.evidence.meta.warnings.join(' | ')}</div> : null}
+
         {insights.length ? (
           <>
             <div className="status-row">
               <span className="pill solid">{directCount} {t.evidencePage.directBadge}</span>
               <span className="pill">{fallbackCount} {t.evidencePage.fallbackBadge}</span>
             </div>
-            {!directCount ? <div className="status-banner warning">{t.evidencePage.liveHint}</div> : null}
-            {pack?.evidence?.meta?.warnings?.length ? <div className="status-banner warning">{pack.evidence.meta.warnings.join(' | ')}</div> : null}
+            {fallbackCount ? <div className="status-banner warning">{t.evidencePage.fallbackMode}</div> : null}
             <div className="evidence-grid">{insights.map((item, index) => (
-              <article className="evidence-card" key={`${item.question}-${index}`}>
+              <article className="evidence-card" key={`${item.title || item.question}-${index}`}>
                 <div className="evidence-top">
                   <span className="pill solid">{item.source}</span>
                   <span className={`pill ${item.referenceUrl ? 'subtle' : 'danger'}`}>{item.referenceUrl ? t.evidencePage.directBadge : t.evidencePage.fallbackBadge}</span>
-                  {item.style ? <span className="pill">{item.style}</span> : null}
+                  {item.pageType ? <span className="pill">{t.evidencePage.pageType}: {item.pageType}</span> : null}
+                  {item.score ? <span className="pill">{t.evidencePage.score}: {item.score}</span> : null}
                 </div>
                 <h4>{item.title || item.question}</h4>
-                <p>{item.question}</p>
-                <small>{item.notes}</small>
+                {item.snippet ? <p className="snippet-copy">{item.snippet}</p> : <p>{item.question}</p>}
+                {item.whyMatched ? <small><span className="mini-label">{t.evidencePage.whyMatched}</span>{item.whyMatched}</small> : null}
+                {item.notes && item.notes !== item.snippet && item.notes !== item.whyMatched ? <small>{item.notes}</small> : null}
+                {item.matchedKeywords?.length ? (
+                  <div className="pill-row">
+                    {item.matchedKeywords.map((keyword) => <span key={keyword} className="pill subtle">{keyword}</span>)}
+                  </div>
+                ) : null}
                 <div className="link-row">
                   {item.referenceUrl ? <a href={item.referenceUrl} target="_blank" rel="noreferrer" className="link-pill">{t.sourceOpen}</a> : null}
                   {item.referenceSearchUrl ? <a href={item.referenceSearchUrl} target="_blank" rel="noreferrer" className="link-pill">{t.sourceSearch}</a> : null}
@@ -650,14 +852,38 @@ function AppInner() {
   const [resumeProfile, setResumeProfile] = useState(null)
   const [insights, setInsights] = useState([])
   const [pack, setPack] = useState(null)
+  const [scrapeState, setScrapeState] = useState(null)
+  const [crawlerStatus, setCrawlerStatus] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generateError, setGenerateError] = useState('')
   const [parseError, setParseError] = useState('')
   const [feedback, setFeedback] = useState(defaultFeedback)
   const [feedbackState, setFeedbackState] = useState('')
-  const [bootstrap, setBootstrap] = useState({ feedbackCount: 0, recentSessions: [] })
+  const [bootstrap, setBootstrap] = useState(defaultBootstrap)
 
   const t = useMemo(() => copy[form.language], [form.language])
+
+  async function refreshBootstrap() {
+    try {
+      const response = await fetch(apiUrl('/api/interview/workspace/bootstrap'))
+      const json = await response.json()
+      const next = json.data || defaultBootstrap
+      setBootstrap(next)
+      if (next.crawlerStatus) setCrawlerStatus(next.crawlerStatus)
+    } catch {
+      setBootstrap(defaultBootstrap)
+    }
+  }
+
+  async function refreshCrawlerStatus() {
+    try {
+      const response = await fetch(apiUrl('/api/interview/crawler/status'))
+      const json = await response.json()
+      if (json.ok) setCrawlerStatus(json.data)
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     if (!form.company.trim() || !form.role.trim()) {
@@ -672,10 +898,8 @@ function AppInner() {
   }, [form.company, form.role, form.interviewType, form.language])
 
   useEffect(() => {
-    fetch(apiUrl('/api/interview/workspace/bootstrap'))
-      .then((response) => response.json())
-      .then((data) => setBootstrap(data.data || { feedbackCount: 0, recentSessions: [] }))
-      .catch(() => setBootstrap({ feedbackCount: 0, recentSessions: [] }))
+    refreshBootstrap()
+    refreshCrawlerStatus()
   }, [])
 
   async function handleGenerate(event) {
@@ -698,11 +922,15 @@ function AppInner() {
       if (!res.ok || !json.ok || !json.data) throw new Error(json.message || t.errors.generate)
 
       setPack(json.data)
+      setScrapeState(json.scrape || null)
       setInsights(json.data?.evidence?.items || json.retrieval?.matches || [])
-      if (json.resumeProfile) setResumeProfile(json.resumeProfile)
+      if (json.resumeProfile) {
+        setResumeProfile(json.resumeProfile)
+        setForm((prev) => ({ ...prev, resume: json.resumeProfile.rawText || payload.resume }))
+      }
+      if (json.scrape?.crawlerStatus) setCrawlerStatus(json.scrape.crawlerStatus)
       setFeedback((prev) => ({ ...prev, company: payload.company, role: payload.role, interviewType: payload.interviewType }))
-      const boot = await fetch(apiUrl('/api/interview/workspace/bootstrap')).then((response) => response.json())
-      setBootstrap(boot.data || bootstrap)
+      await refreshBootstrap()
     } catch (error) {
       setPack(null)
       setGenerateError(error.message || t.errors.generate)
@@ -727,8 +955,7 @@ function AppInner() {
       if (!res.ok) throw new Error('Feedback failed')
       setFeedbackState('submitted')
       setFeedback(defaultFeedback)
-      const boot = await fetch(apiUrl('/api/interview/workspace/bootstrap')).then((response) => response.json())
-      setBootstrap(boot.data || bootstrap)
+      await refreshBootstrap()
     } catch {
       setFeedbackState('error')
     }
@@ -760,8 +987,8 @@ function AppInner() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage t={t} pack={pack} insights={insights} bootstrap={bootstrap} />} />
           <Route path="/resume" element={<ResumePage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} setResumeProfile={setResumeProfile} resumePaste={resumePaste} setResumePaste={setResumePaste} parseError={parseError} setParseError={setParseError} />} />
-          <Route path="/prep" element={<PrepPage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} pack={pack} insights={insights} loading={loading} generateError={generateError} onGenerate={handleGenerate} onDownloadDoc={() => downloadCheatSheetDoc({ form, pack, resumeProfile })} />} />
-          <Route path="/evidence" element={<EvidencePage t={t} insights={insights} pack={pack} />} />
+          <Route path="/prep" element={<PrepPage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} pack={pack} insights={insights} scrapeState={scrapeState} crawlerStatus={crawlerStatus} loading={loading} generateError={generateError} onGenerate={handleGenerate} onDownloadDoc={() => downloadCheatSheetDoc({ form, pack, resumeProfile })} />} />
+          <Route path="/evidence" element={<EvidencePage t={t} insights={insights} pack={pack} scrapeState={scrapeState} crawlerStatus={crawlerStatus} language={form.language} />} />
           <Route path="/review" element={<ReviewPage t={t} feedback={feedback} setFeedback={setFeedback} feedbackState={feedbackState} onSubmit={handleFeedbackSubmit} />} />
         </Routes>
       </div>

@@ -3,7 +3,7 @@ import multer from 'multer'
 import { z } from 'zod'
 import { retrieveInterviewSignals } from '../services/retrievalService.js'
 import { generateInterviewPack } from '../services/aiService.js'
-import { buildScrapeNextStep, getScrapeConfig, runLiveScrape } from '../services/scrapeService.js'
+import { buildScrapeNextStep, getCrawlerStatus, getScrapeConfig, runLiveScrape } from '../services/scrapeService.js'
 import { analyzeResumeText, parseResumeFile } from '../services/resumeService.js'
 import { countFeedback, getStorageStatus, listSessions, saveFeedback, saveSession } from '../utils/storage.js'
 
@@ -59,6 +59,18 @@ router.get('/insights', async (req, res) => {
     res.json({ ok: true, data: retrieval })
   } catch (error) {
     console.error('[interview/insights] failed:', error.message)
+    res.status(400).json({ ok: false, message: error.message })
+  }
+})
+
+router.get('/crawler/status', async (_, res) => {
+  try {
+    res.json({
+      ok: true,
+      data: getCrawlerStatus()
+    })
+  } catch (error) {
+    console.error('[interview/crawler-status] failed:', error.message)
     res.status(400).json({ ok: false, message: error.message })
   }
 })
@@ -122,7 +134,8 @@ router.get('/workspace/bootstrap', async (req, res) => {
       data: {
         feedbackCount,
         recentSessions,
-        storage
+        storage,
+        crawlerStatus: getCrawlerStatus()
       }
     })
   } catch (error) {

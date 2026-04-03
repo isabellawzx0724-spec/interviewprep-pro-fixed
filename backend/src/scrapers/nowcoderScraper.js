@@ -28,11 +28,19 @@ function buildSnippet($, element, title) {
   return cleanText(text.replace(title, '')).slice(0, 220)
 }
 
-function detectPageWarning(text = '') {
+function detectSignals(text = '') {
   const haystack = cleanText(text)
-  if (!haystack) return ''
-  if (/验证码|安全验证|请完成验证|captcha|robot/i.test(haystack)) return 'anti-bot checkpoint detected'
-  if (/登录|扫码登录|手机号登录/i.test(haystack)) return 'login prompt detected'
+  return {
+    antiBotDetected: /验证码|安全验证|请完成验证|请先验证|captcha|robot|异常访问/i.test(haystack),
+    loginDetected: /登录后查看|登录查看更多|登录|扫码登录|手机号登录|立即登录/i.test(haystack),
+    contentDetected: /面经|面试|一面|二面|三面|终面|复盘|offer|笔试|自我介绍|问了什么/i.test(haystack)
+  }
+}
+
+function detectPageWarning(text = '') {
+  const signals = detectSignals(text)
+  if (signals.antiBotDetected) return 'anti-bot checkpoint detected'
+  if (signals.loginDetected) return 'login prompt detected'
   return ''
 }
 
@@ -56,7 +64,14 @@ export async function scrapeNowcoder({ company, role, queries = [], limit = 24, 
   const diagnostics = {
     source: 'Nowcoder',
     warnings: [],
-    queryStats: []
+    queryStats: [],
+    cookieConfigured: Boolean(cookie),
+    cookieInjected: false,
+    loginDetected: false,
+    antiBotDetected: false,
+    authenticatedLikely: false,
+    candidateCount: 0,
+    lastError: ''
   }
 
   try {
@@ -67,6 +82,10 @@ export async function scrapeNowcoder({ company, role, queries = [], limit = 24, 
 
     if (cookie) {
       await page.context().addCookies(parseCookie(cookie, '.nowcoder.com'))
+      diagnostics.cookieInjected = true
+      console.info('[scrape/nowcoder] cookie injected into browser context')
+    } else {
+      console.warn('[scrape/nowcoder] cookie missing, running in fallback mode')
     }
 
     const effectiveQueries = Array.isArray(queries) && queries.length
@@ -84,7 +103,13 @@ export async function scrapeNowcoder({ company, role, queries = [], limit = 24, 
 
         const html = await page.content()
         const $ = cheerio.load(html)
-        const pageWarning = detectPageWarning($('body').text())
+        const bodyText = $('body').text()
+        const pageSignals = detectSignals(bodyText)
+        const pageWarning = detectPageWarning(bodyText)
+
+        diagnostics.loginDetected = diagnostics.loginDetected || pageSignals.loginDetected
+        diagnostics.antiBotDetected = diagnostics.antiBotDetected || pageSignals.antiBotDetected
+
         if (pageWarning) diagnostics.warnings.push(`${query}: ${pageWarning}`)
 
         const batch = []
@@ -111,15 +136,22 @@ export async function scrapeNowcoder({ company, role, queries = [], limit = 24, 
           })
         })
 
+        if (cookie && batch.length && !pageSignals.loginDetected && !pageSignals.antiBotDetected) {
+          diagnostics.authenticatedLikely = true
+        }
+
         diagnostics.queryStats.push({
           query,
           searchUrl,
           candidateCount: batch.length,
-          pageWarning: pageWarning || ''
+          pageWarning: pageWarning || '',
+          loginDetected: pageSignals.loginDetected,
+          antiBotDetected: pageSignals.antiBotDetected
         })
 
         aggregated.push(...batch)
       } catch (error) {
+        diagnostics.lastError = error.message
         diagnostics.queryStats.push({
           query,
           searchUrl,
@@ -130,12 +162,16 @@ export async function scrapeNowcoder({ company, role, queries = [], limit = 24, 
       }
     }
 
+    const results = dedupeResults(aggregated, limit)
+    diagnostics.candidateCount = results.length
+
     return {
-      results: dedupeResults(aggregated, limit),
+      results,
       diagnostics
     }
   } catch (error) {
     error.source = 'Nowcoder'
+    diagnostics.lastError = error.message
     error.diagnostics = diagnostics
     throw error
   } finally {

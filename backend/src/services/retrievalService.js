@@ -162,7 +162,8 @@ export async function retrieveInterviewSignals({ company = '', role = '', interv
       directLinkCount,
       liveEvidenceCount: liveEvidence.length,
       preferredEvidenceCount: liveEvidence.length,
-      searchKeywords: searchPlan.keywordsBySource
+      searchKeywords: searchPlan.keywordsBySource,
+      sourcePlans: searchPlan.sourcePlans
     }
   }
 }
