@@ -19,12 +19,24 @@ services:
         value: "false"
       - key: PLAYWRIGHT_HEADLESS
         value: "true"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: "0"
       - key: SCRAPE_TIMEOUT_MS
         value: "15000"
+      - key: AI_PROVIDER
+        value: "openai"
+      - key: RESUME_AI_PROVIDER
+        value: "anthropic"
+      - key: AI_ANSWER_ENABLED
+        value: "true"
       - key: NOWCODER_COOKIE
         sync: false
       - key: XIAOHONGSHU_COOKIE
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        value: "claude-3-5-sonnet-latest"
       - key: ALLOWED_ORIGIN
         sync: false
       - key: NODE_VERSION

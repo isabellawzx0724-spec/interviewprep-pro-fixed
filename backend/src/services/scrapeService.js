@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs'
+import { chromium } from 'playwright'
 import { scrapeNowcoder } from '../scrapers/nowcoderScraper.js'
 import { scrapeXiaohongshu } from '../scrapers/xiaohongshuScraper.js'
 
@@ -72,6 +74,7 @@ const runtimeState = {
     source: 'Nowcoder',
     cookieValid: 'unknown',
     lastError: '',
+    lastErrorCode: '',
     lastCheckedAt: '',
     authenticatedLikely: false,
     cookieInjectedLastRun: false,
@@ -81,10 +84,97 @@ const runtimeState = {
     source: 'Xiaohongshu',
     cookieValid: 'unknown',
     lastError: '',
+    lastErrorCode: '',
     lastCheckedAt: '',
     authenticatedLikely: false,
     cookieInjectedLastRun: false,
     searchRewriteEnabled: true
+  }
+}
+
+function cleanDiagnosticText(value = '') {
+  return String(value)
+    .replace(/\u001b\[[0-9;]*m/g, ' ')
+    .replace(/[─-╿▀-▟]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function classifyScrapeError(value = '') {
+  const message = cleanDiagnosticText(value)
+
+  if (!message) return { code: '', message: '' }
+  if (/browser executable doesn't exist|executable doesn't exist|please run:.*playwright install|failed to launch browser/i.test(message)) {
+    return { code: 'browser-not-installed', message: 'Browser not installed on server' }
+  }
+  if (/host system is missing dependencies|missing dependencies|lib.*.so/i.test(message)) {
+    return { code: 'browser-runtime-missing-deps', message: 'Browser runtime missing required system libraries' }
+  }
+  if (/timeout/i.test(message)) {
+    return { code: 'timeout', message: 'Source temporarily timed out' }
+  }
+  if (/captcha|anti-bot|verification|verify|异常访问|安全验证|验证码/i.test(message)) {
+    return { code: 'source-blocked', message: 'Source temporarily blocked' }
+  }
+  if (/cookie|login|signin|登录|扫码登录/i.test(message)) {
+    return { code: 'cookie-invalid', message: 'Cookie invalid or login required' }
+  }
+  if (/selector|locator/i.test(message)) {
+    return { code: 'selector-outdated', message: 'Scraper selector outdated' }
+  }
+
+  return { code: 'scrape-unavailable', message: 'Source temporarily unavailable' }
+}
+
+function sanitizePublicError(value = '') {
+  const message = cleanDiagnosticText(value)
+  if (!message) return ''
+  if (/company-too-short|role-too-short|cookie missing|ALLOW_LIVE_SCRAPE/i.test(message)) return message
+  return classifyScrapeError(message).message || 'Source temporarily unavailable'
+}
+
+function sanitizeWarnings(warnings = []) {
+  return uniqueStrings(warnings.map((item) => sanitizePublicError(item)).filter(Boolean), 12)
+}
+
+function sanitizeDiagnostics(diagnostics = null) {
+  if (!diagnostics) return null
+
+  return {
+    ...diagnostics,
+    warnings: sanitizeWarnings(diagnostics.warnings || []),
+    lastError: sanitizePublicError(diagnostics.lastError || ''),
+    lastErrorCode: classifyScrapeError(diagnostics.lastError || '').code || '',
+    queryStats: Array.isArray(diagnostics.queryStats)
+      ? diagnostics.queryStats.map((item) => ({
+        ...item,
+        error: sanitizePublicError(item.error || ''),
+        errorCode: classifyScrapeError(item.error || '').code || '',
+        pageWarning: sanitizePublicError(item.pageWarning || ''),
+        pageWarningCode: classifyScrapeError(item.pageWarning || '').code || ''
+      }))
+      : []
+  }
+}
+
+function getBrowserRuntime() {
+  try {
+    const browserPath = cleanDiagnosticText(typeof chromium.executablePath === 'function' ? chromium.executablePath() : '')
+    const browserExecutableFound = Boolean(browserPath) && existsSync(browserPath)
+    return {
+      playwrightInstalled: true,
+      browserPath,
+      browserExecutableFound,
+      browserRuntimeReady: browserExecutableFound
+    }
+  } catch (error) {
+    return {
+      playwrightInstalled: false,
+      browserPath: '',
+      browserExecutableFound: false,
+      browserRuntimeReady: false,
+      browserIssue: sanitizePublicError(error.message || '')
+    }
   }
 }
 
@@ -482,7 +572,8 @@ function updateRuntimeStatus(source, config, diagnostics = null, errorMessage = 
   runtimeState[source] = {
     ...runtime,
     lastCheckedAt: new Date().toISOString(),
-    lastError: errorMessage || diagnostics?.lastError || '',
+    lastError: sanitizePublicError(errorMessage || diagnostics?.lastError || ''),
+    lastErrorCode: classifyScrapeError(errorMessage || diagnostics?.lastError || '').code || '',
     authenticatedLikely: Boolean(diagnostics?.authenticatedLikely),
     cookieInjectedLastRun: Boolean(diagnostics?.cookieInjected),
     cookieValid: diagnostics ? inferCookieValidity(source === 'Nowcoder' ? config.hasNowcoderCookie : config.hasXiaohongshuCookie, diagnostics) : runtime.cookieValid,
@@ -493,12 +584,15 @@ function updateRuntimeStatus(source, config, diagnostics = null, errorMessage = 
   }
 }
 
-function buildStatus({ config, warnings = [], rawCandidateCount = 0, highQualityCount = 0, excluded = [] }) {
+function buildStatus({ config, warnings = [], rawCandidateCount = 0, highQualityCount = 0, excluded = [], sourceDiagnostics = [] }) {
   const lowerWarnings = warnings.map((item) => normalizeKey(item))
 
   if (!config.enabled) return 'disabled'
+  if (!config.browserRuntimeReady) return 'browser-unavailable'
+  if (lowerWarnings.some((item) => item.includes('browser not installed') || item.includes('browser runtime'))) return 'browser-unavailable'
   if (lowerWarnings.some((item) => item.includes('anti-bot') || item.includes('captcha') || item.includes('验证'))) return 'anti-bot'
   if (lowerWarnings.some((item) => item.includes('timeout'))) return 'timeout'
+  if (sourceDiagnostics.some((item) => item?.loginDetected) && !highQualityCount) return 'cookie-invalid'
   if (highQualityCount) return 'ok'
   if (!config.hasNowcoderCookie && !config.hasXiaohongshuCookie) return 'cookie-missing'
   if (!config.hasNowcoderCookie || !config.hasXiaohongshuCookie) return 'cookie-partial'
@@ -514,10 +608,14 @@ export function buildScrapeNextStep(result) {
   switch (result.status) {
     case 'disabled':
       return 'ALLOW_LIVE_SCRAPE 还是 false，请先打开实时抓取。'
+    case 'browser-unavailable':
+      return '服务端浏览器运行环境还没准备好。先确认 Render build 阶段已执行 playwright install chromium，并检查 crawler status 里的 browserRuntimeReady / browserExecutableFound。'
     case 'cookie-missing':
       return '两个中文站点的 cookie 都没有读到，请重新复制浏览器里完整 Cookie 到环境变量。'
     case 'cookie-partial':
       return '至少有一个中文站点还没有可用 cookie。先看 crawler status，确认是缺失还是已失效。'
+    case 'cookie-invalid':
+      return 'Cookie 已读取，但站点仍然出现登录提示。优先刷新登录态，并在 debug.sourceDiagnostics 里确认是哪个 source 失效。'
     case 'anti-bot':
       return '站点很可能触发了反爬或登录校验，先刷新 Cookie，再尝试 PLAYWRIGHT_HEADLESS=false 本地调试。'
     case 'timeout':
@@ -538,13 +636,21 @@ export function isHighQualityEvidence(item = {}) {
 }
 
 export function getScrapeConfig() {
+  const browserRuntime = getBrowserRuntime()
   return {
     enabled: process.env.ALLOW_LIVE_SCRAPE === 'true',
     headless: process.env.PLAYWRIGHT_HEADLESS !== 'false',
     timeoutMs: toNumber(process.env.SCRAPE_TIMEOUT_MS, 15000),
     hasNowcoderCookie: Boolean(process.env.NOWCODER_COOKIE),
     hasXiaohongshuCookie: Boolean(process.env.XIAOHONGSHU_COOKIE),
-    chineseQueryRewriteEnabled: true
+    chineseQueryRewriteEnabled: true,
+    playwrightInstalled: browserRuntime.playwrightInstalled,
+    browserExecutableFound: browserRuntime.browserExecutableFound,
+    browserRuntimeReady: browserRuntime.browserRuntimeReady,
+    browserPath: browserRuntime.browserPath,
+    browserIssue: browserRuntime.browserIssue || '',
+    browserIssueCode: classifyScrapeError(browserRuntime.browserIssue || '').code || '',
+    liveScrapeAvailable: process.env.ALLOW_LIVE_SCRAPE === 'true' && browserRuntime.browserRuntimeReady
   }
 }
 
@@ -563,8 +669,10 @@ export function getCrawlerStatus() {
       antiBotDetected: Boolean(runtimeState.Nowcoder.antiBotDetected),
       candidateCount: Number(runtimeState.Nowcoder.candidateCount || 0),
       lastError: runtimeState.Nowcoder.lastError,
+      lastErrorCode: runtimeState.Nowcoder.lastErrorCode,
       lastCheckedAt: runtimeState.Nowcoder.lastCheckedAt,
-      searchRewriteEnabled: true
+      searchRewriteEnabled: true,
+      liveScrapeAvailable: config.liveScrapeAvailable
     },
     {
       key: 'xiaohongshu',
@@ -578,14 +686,23 @@ export function getCrawlerStatus() {
       antiBotDetected: Boolean(runtimeState.Xiaohongshu.antiBotDetected),
       candidateCount: Number(runtimeState.Xiaohongshu.candidateCount || 0),
       lastError: runtimeState.Xiaohongshu.lastError,
+      lastErrorCode: runtimeState.Xiaohongshu.lastErrorCode,
       lastCheckedAt: runtimeState.Xiaohongshu.lastCheckedAt,
-      searchRewriteEnabled: true
+      searchRewriteEnabled: true,
+      liveScrapeAvailable: config.liveScrapeAvailable
     }
   ]
 
   return {
     crawlerEnabled: config.enabled,
     chineseQueryRewriteEnabled: true,
+    playwrightInstalled: config.playwrightInstalled,
+    browserExecutableFound: config.browserExecutableFound,
+    browserRuntimeReady: config.browserRuntimeReady,
+    browserPath: config.browserPath,
+    browserIssue: config.browserIssue,
+    browserIssueCode: config.browserIssueCode,
+    liveScrapeAvailable: config.liveScrapeAvailable,
     sources
   }
 }
@@ -629,6 +746,31 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
 
   if (!config.hasNowcoderCookie) initialWarnings.push('Nowcoder cookie missing')
   if (!config.hasXiaohongshuCookie) initialWarnings.push('Xiaohongshu cookie missing')
+  if (!config.browserRuntimeReady) initialWarnings.push(config.browserIssue || 'Browser not installed on server')
+
+  if (!config.browserRuntimeReady) {
+    const result = {
+      enabled: true,
+      config,
+      status: 'browser-unavailable',
+      searchPlan,
+      results: [],
+      rawCandidateCount: 0,
+      filteredCount: 0,
+      warnings: sanitizeWarnings(initialWarnings),
+      debug: {
+        keywords: searchPlan.keywordsBySource,
+        rawCandidateCount: 0,
+        filteredCount: 0,
+        excludedTop: [],
+        sourceDiagnostics: [],
+        qualityThreshold: HIGH_QUALITY_SCORE
+      },
+      crawlerStatus: getCrawlerStatus()
+    }
+    result.debug.nextStep = buildScrapeNextStep(result)
+    return result
+  }
 
   logSourcePlan(searchPlan)
 
@@ -659,7 +801,7 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
     if (settled.status === 'fulfilled') {
       rawResults.push(...(settled.value.results || []))
       if (settled.value.diagnostics) {
-        sourceDiagnostics.push(settled.value.diagnostics)
+        sourceDiagnostics.push(sanitizeDiagnostics(settled.value.diagnostics))
         updateRuntimeStatus(settled.value.diagnostics.source, config, settled.value.diagnostics)
       }
       if (Array.isArray(settled.value.diagnostics?.warnings)) warnings.push(...settled.value.diagnostics.warnings)
@@ -667,9 +809,9 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
       const message = settled.reason?.message || 'unknown error'
       const source = settled.reason?.source || 'Scraper'
       console.warn(`[scrape] ${source} failed: ${message}`)
-      warnings.push(`${source} scrape failed: ${message}`)
+      warnings.push(`${source} ${sanitizePublicError(message)}`)
       updateRuntimeStatus(source, config, settled.reason?.diagnostics, message)
-      if (settled.reason?.diagnostics) sourceDiagnostics.push(settled.reason.diagnostics)
+      if (settled.reason?.diagnostics) sourceDiagnostics.push(sanitizeDiagnostics(settled.reason.diagnostics))
     }
   }
 
@@ -684,7 +826,8 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
     warnings,
     rawCandidateCount: ranked.length,
     highQualityCount: included.length,
-    excluded
+    excluded,
+    sourceDiagnostics
   })
 
   const result = {
@@ -695,7 +838,7 @@ export async function runLiveScrape({ company = '', role = '', interviewType = '
     results: included,
     rawCandidateCount: ranked.length,
     filteredCount: included.length,
-    warnings: uniqueStrings(warnings, 12),
+    warnings: sanitizeWarnings(warnings),
     debug: {
       keywords: searchPlan.keywordsBySource,
       rawCandidateCount: ranked.length,

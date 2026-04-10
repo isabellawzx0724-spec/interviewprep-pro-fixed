@@ -105,3 +105,81 @@ Rules:
 - Do not cite landing pages, product pages, interview centers, AI mock pages, or generic search pages as interview evidence.
 `
 }
+
+function slimAnswerEvidence(items = []) {
+  return items.slice(0, 4).map((item) => ({
+    source: item.source,
+    title: item.title || item.question || '',
+    snippet: item.snippet || item.notes || '',
+    whyMatched: item.whyMatched || '',
+    referenceUrl: item.referenceUrl || item.url || '',
+    referenceSearchUrl: item.referenceSearchUrl || item.searchUrl || '',
+    pageType: item.pageType || 'unknown',
+    score: Number(item.score || 0),
+    kind: item.kind || (item.referenceUrl || item.url ? 'direct' : 'search')
+  }))
+}
+
+export function buildAnswerPrompt(input, {
+  question,
+  answerLanguage = input.language || 'zh',
+  answerLength = 'standard',
+  tone = 'natural',
+  resumeProfile = {},
+  questionPlan = {},
+  evidence = []
+} = {}) {
+  const languageName = answerLanguage === 'zh' ? 'Chinese' : 'English'
+  const answerEvidence = slimAnswerEvidence(evidence)
+
+  return `
+You are an interview answer coach for a serious consumer SaaS product.
+Return JSON only.
+Target language: ${languageName}.
+Tone: ${tone}.
+Target answer length: ${answerLength}.
+
+Candidate context:
+- Company: ${input.company}
+- Role: ${input.role}
+- Interview type: ${input.interviewType}
+- Output language: ${answerLanguage}
+- JD:\n${input.jd}
+- Resume raw text:\n${input.resume}
+- Resume parsed profile:\n${JSON.stringify(resumeProfile, null, 2)}
+
+Interview question:
+${JSON.stringify({
+  question,
+  questionPlan
+}, null, 2)}
+
+Supporting evidence:
+${JSON.stringify(answerEvidence, null, 2)}
+
+Return this exact shape:
+{
+  "question": string,
+  "language": string,
+  "tone": string,
+  "fullAnswer": string,
+  "shortAnswer": string,
+  "answerStructure": string[],
+  "followUps": string[],
+  "risks": string[],
+  "evidenceUsed": [{"label": string, "url": string, "kind": string}],
+  "notes": string
+}
+
+Rules:
+- Use only facts grounded in the user's resume, JD, and supporting evidence.
+- Never invent employers, projects, metrics, ownership, or tools that are not supported by the provided context.
+- If the evidence is thin, use cautious wording and explicitly note what detail should be clarified.
+- The full answer should sound like a spoken interview answer, not a written essay.
+- The short answer should be a crisp 30-60 second version.
+- The answer structure should help the user memorize the flow, not repeat the full answer sentence by sentence.
+- Follow-ups should be realistic interviewer follow-up angles.
+- Risks should be concrete and honest. If there is no major risk, return one short reassuring line instead of fabricating problems.
+- Prefer direct evidence URLs when available. Only fall back to search URLs when no direct source is available.
+`
+}

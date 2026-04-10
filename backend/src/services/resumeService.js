@@ -2,8 +2,14 @@ import mammoth from 'mammoth'
 import OpenAI from 'openai'
 import pdfParse from 'pdf-parse'
 
-const aiClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
-const analysisModel = process.env.RESUME_ANALYSIS_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
+const resumeProvider = String(
+  process.env.RESUME_AI_PROVIDER
+  || process.env.AI_PROVIDER
+  || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'openai')
+).toLowerCase()
+const openaiAnalysisModel = process.env.RESUME_ANALYSIS_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+const anthropicAnalysisModel = process.env.RESUME_ANALYSIS_MODEL || process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest'
 
 const SKILL_BANK = [
   'sql', 'python', 'r', 'tableau', 'excel', 'spss', 'power bi', 'looker', 'pandas', 'spark',
@@ -180,6 +186,12 @@ function uniqueStrings(values = [], limit = 8) {
       .map((item) => String(item || '').trim())
       .filter(Boolean)
   )].slice(0, limit)
+}
+
+function truncateText(text = '', limit = 220) {
+  const normalized = normalizeLine(text)
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit - 1)}…`
 }
 
 function extractSkills(text = '', sections = []) {
@@ -490,6 +502,7 @@ function sanitizeImprovements(value, fallback = []) {
       severity: Number(item?.severity || 0)
     }))
     .filter((item) => item.original && item.issue && item.rewriteDirection)
+    .filter((item) => !isLowValueMetaLine(item.original))
 
   return items.length ? items.slice(0, 5) : fallback
 }
@@ -560,20 +573,21 @@ function normalizeProfileShape(candidate, fallback, text, meta = {}) {
 }
 
 async function analyzeResumeWithAI(text = '', language = 'zh') {
-  if (!aiClient || !text.trim()) return null
+  if (!text.trim()) return null
 
   const prompt = `
-You are a resume strategist inspired by VMock-style review logic.
+You are a professional big-tech HR coach with deep resume rewriting expertise.
 Return JSON only.
 Target language: ${language === 'zh' ? 'Chinese' : 'English'}.
 
 Analyze the resume below for interview preparation.
 Critical rules:
-- Be conservative. If a bullet is already solid, mark it as keep instead of forcing a rewrite.
-- Do NOT mark contact details, school names, degree names, GPA, locations, language ability lines, or coursework lists as rewrite priorities unless they are malformed.
-- Focus weak-line feedback on experience, project, leadership, or achievement statements.
-- Prefer evidence that can actually be rehearsed in an interview.
-- Keep all output concise and product-ready.
+- Be conservative. If a bullet already has clear STAR structure, mark it as keep.
+- Rewrite suggestions must follow STAR logic: Situation/Task + Action + Result.
+- Do NOT put school names, degrees, GPA, language abilities, locations, contact lines, or coursework into high-priority rewrites.
+- High-priority rewrites should only target experience/project/leadership/achievement bullets with weak STAR expression.
+- Avoid generic fluff. Give practical rewrite direction the user can apply directly.
+- Keep output concise and product-ready.
 
 Resume text:
 ${text.slice(0, 14000)}
@@ -602,9 +616,38 @@ Required JSON shape:
   ]
 }
 `
+  if (resumeProvider === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: anthropicAnalysisModel,
+        max_tokens: 2200,
+        temperature: 0.2,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    })
 
-  const response = await aiClient.responses.create({
-    model: analysisModel,
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`Resume AI (Anthropic) failed: ${truncateText(text, 180)}`)
+    }
+
+    const payload = await response.json()
+    const content = Array.isArray(payload?.content)
+      ? payload.content.map((item) => item?.text || '').join('\n').trim()
+      : '{}'
+    return JSON.parse(content || '{}')
+  }
+
+  if (!openaiClient) return null
+
+  const response = await openaiClient.responses.create({
+    model: openaiAnalysisModel,
     input: prompt,
     text: { format: { type: 'json_object' } }
   })

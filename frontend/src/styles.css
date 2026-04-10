@@ -91,6 +91,26 @@ button:disabled { cursor: not-allowed; opacity: 0.65; transform: none; }
 .page-grid.two-column { grid-template-columns: minmax(380px, 540px) minmax(540px, 1fr); align-items: start; }
 .page-grid.one-column { grid-template-columns: 1fr; }
 
+.prep-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+.prep-main,
+.prep-rail-stack,
+.answer-list,
+.diagnostics-stack,
+.diagnostic-list {
+  display: grid;
+  gap: 18px;
+}
+
+.prep-rail-sticky {
+  position: static;
+}
+
 .shell-card {
   background: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(204, 215, 231, 0.92);
@@ -288,6 +308,7 @@ input:focus, textarea:focus, select:focus {
 .round-card { padding: 18px; display: grid; gap: 10px; }
 .emphasis-card { background: linear-gradient(135deg, rgba(20, 35, 71, 0.04), rgba(20, 35, 71, 0.09)); }
 .mini-label { display: inline-block; min-width: 72px; margin-right: 6px; }
+.compact-list { gap: 6px; }
 
 .keyword-block { padding: 16px; display: grid; gap: 10px; }
 .score-strip {
@@ -380,7 +401,7 @@ input:focus, textarea:focus, select:focus {
 
 .resume-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(320px, 0.95fr);
+  grid-template-columns: 1fr;
   gap: 24px;
   align-items: start;
 }
@@ -405,14 +426,13 @@ input:focus, textarea:focus, select:focus {
 }
 
 .resume-rail-sticky {
-  position: sticky;
-  top: 24px;
+  position: static;
 }
 
 .resume-rail-scroll {
-  max-height: calc(100vh - 180px);
-  overflow: auto;
-  padding-right: 4px;
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .compact-panel {
@@ -497,6 +517,10 @@ input:focus, textarea:focus, select:focus {
   grid-template-columns: 1fr;
 }
 
+.evidence-status-strip {
+  margin-bottom: 10px;
+}
+
 .source-status-card.success {
   border-color: #cfe8db;
   background: #f4fbf7;
@@ -527,6 +551,16 @@ input:focus, textarea:focus, select:focus {
   font-size: 0.92rem;
 }
 
+.source-status-card {
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.source-status-card p {
+  color: #51627f;
+  font-size: 0.95rem;
+}
+
 .rewrite-panel {
   display: grid;
   gap: 14px;
@@ -540,11 +574,123 @@ input:focus, textarea:focus, select:focus {
   color: #243756;
 }
 
+.answer-toolbar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 220px)) minmax(220px, 1fr);
+  gap: 14px;
+  align-items: end;
+}
+
+.ai-runtime-card,
+.answer-card,
+.diagnostic-card,
+.diagnostic-item {
+  border: 1px solid #dde6f1;
+  border-radius: 20px;
+  background: #fbfcfe;
+}
+
+.ai-runtime-card {
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.answer-card {
+  padding: 18px;
+  display: grid;
+  gap: 14px;
+}
+
+.answer-card-head,
+.answer-question-meta {
+  display: grid;
+  gap: 10px;
+}
+
+.answer-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.answer-card-head h4,
+.diagnostic-card h5 {
+  margin: 8px 0 0;
+}
+
+.answer-content-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.answer-panel {
+  border: 1px solid #dde6f1;
+  border-radius: 18px;
+  background: white;
+  padding: 15px 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.answer-panel h5,
+.diagnostic-item strong {
+  margin: 0;
+}
+
+.answer-panel p,
+.answer-panel small,
+.diagnostic-card p,
+.diagnostic-item p,
+.diagnostic-item small {
+  margin: 0;
+}
+
+.subtle-panel {
+  background: #f6f9ff;
+}
+
+.answer-empty-state {
+  border: 1px dashed #cfd9e8;
+  border-radius: 18px;
+  padding: 16px;
+  background: #f8fbff;
+  display: grid;
+  gap: 10px;
+}
+
+.debug-panel {
+  margin-top: 16px;
+}
+
+.diagnostic-card {
+  padding: 16px 18px;
+  display: grid;
+  gap: 12px;
+}
+
+.diagnostic-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.diagnostic-item {
+  padding: 14px 15px;
+  display: grid;
+  gap: 6px;
+}
+
+.rail-grid {
+  grid-template-columns: 1fr;
+}
+
 @media (max-width: 1320px) {
   .resume-shell,
   .source-status-grid,
   .story-grid,
-  .file-summary-grid {
+  .file-summary-grid,
+  .answer-toolbar,
+  .answer-content-grid,
+  .diagnostic-list {
     grid-template-columns: 1fr;
   }
 
@@ -552,9 +698,5 @@ input:focus, textarea:focus, select:focus {
     position: static;
   }
 
-  .resume-rail-scroll {
-    max-height: none;
-    overflow: visible;
-    padding-right: 0;
-  }
+  .prep-rail-sticky { position: static; }
 }

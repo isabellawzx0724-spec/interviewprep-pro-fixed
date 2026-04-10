@@ -60,7 +60,10 @@ function dedupeResults(items = [], limit = 24) {
 }
 
 export async function scrapeNowcoder({ company, role, queries = [], limit = 24, cookie = '', headless = true, timeoutMs = 15000 }) {
-  const browser = await chromium.launch({ headless })
+  const browser = await chromium.launch({
+    headless,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+  })
   const diagnostics = {
     source: 'Nowcoder',
     warnings: [],

@@ -1,9 +1,12 @@
 import OpenAI from 'openai'
-import { buildInterviewPrompt } from './promptBuilder.js'
+import { buildAnswerPrompt, buildInterviewPrompt } from './promptBuilder.js'
 import { parseResumeText } from './resumeService.js'
 
-const client = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
-const preferredModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
+const openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest'
+const aiProvider = String(process.env.AI_PROVIDER || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'disabled'))).toLowerCase()
+const answerGenerationEnabled = process.env.AI_ANSWER_ENABLED !== 'false'
 
 const EN_STOP = new Set(['and', 'with', 'for', 'the', 'your', 'from', 'that', 'this', 'into', 'about', 'role', 'job', 'work', 'team', 'teams', 'support', 'good', 'strong'])
 const METRIC_PATTERN = /(\d|%|kpi|roi|ctr|cvr|gmv|dau|mau|arr|revenue|增长|提升|降低|节省|转化|留存|gmv|roi)/i
@@ -20,6 +23,12 @@ function txt(language = 'zh', zh, en) {
 
 function normalizeLine(value = '') {
   return String(value).replace(/\s+/g, ' ').trim()
+}
+
+function truncateText(value = '', limit = 220) {
+  const normalized = normalizeLine(value)
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit - 1)}…`
 }
 
 function uniqueStrings(values = [], limit = 8) {
@@ -139,6 +148,71 @@ function evidenceRefs(evidence = [], keyword = '') {
       label: item.source,
       url: item.referenceUrl || item.referenceSearchUrl || ''
     }))
+}
+
+export function getAiRuntimeStatus() {
+  const providerConfigured = aiProvider === 'openai'
+    ? Boolean(openaiClient)
+    : aiProvider === 'anthropic'
+      ? Boolean(process.env.ANTHROPIC_API_KEY)
+      : false
+
+  return {
+    provider: aiProvider,
+    answerGenerationEnabled,
+    configured: providerConfigured,
+    model: aiProvider === 'anthropic' ? anthropicModel : openaiModel
+  }
+}
+
+async function callAnthropicJson(prompt) {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('Anthropic API key missing')
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: anthropicModel,
+      max_tokens: 2200,
+      temperature: 0.4,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  })
+
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(`Anthropic request failed: ${truncateText(text, 180)}`)
+  }
+
+  const payload = await response.json()
+  const text = Array.isArray(payload?.content)
+    ? payload.content.map((item) => item?.text || '').join('\n').trim()
+    : ''
+
+  return text || '{}'
+}
+
+async function requestStructuredJson(prompt) {
+  if (aiProvider === 'anthropic') {
+    return callAnthropicJson(prompt)
+  }
+
+  if (!openaiClient) {
+    throw new Error('OpenAI client unavailable')
+  }
+
+  const response = await openaiClient.responses.create({
+    model: openaiModel,
+    input: prompt,
+    text: { format: { type: 'json_object' } }
+  })
+
+  return response.output_text || '{}'
 }
 
 function scoreFitAdvanced(jd, resumeProfile, language = 'zh') {
@@ -552,22 +626,227 @@ function normalizePack(candidate, fallback) {
 export async function generateInterviewPack(input, retrieval, resumeProfile = parseResumeText(input.resume, input.language)) {
   const fallback = fallbackResponse(input, retrieval, resumeProfile)
 
-  if (!client) {
+  if (!getAiRuntimeStatus().configured) {
     return fallback
   }
 
   try {
     const prompt = buildInterviewPrompt(input, retrieval, resumeProfile)
-    const response = await client.responses.create({
-      model: preferredModel,
-      input: prompt,
-      text: { format: { type: 'json_object' } }
-    })
-
-    const content = response.output_text || '{}'
+    const content = await requestStructuredJson(prompt)
     const parsed = JSON.parse(content)
     return normalizePack(parsed, fallback)
   } catch {
     return fallback
+  }
+}
+
+function keywordTokensForSearch(value = '') {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fff\s]/g, ' ')
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2)
+}
+
+function scoreEvidenceForQuestion(question = '', item = {}) {
+  const haystack = `${item.title || ''} ${item.question || ''} ${item.notes || ''} ${item.snippet || ''} ${item.whyMatched || ''}`.toLowerCase()
+  const tokens = keywordTokensForSearch(question)
+  let score = Number(item.score || 0)
+
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += 3
+  }
+
+  if (item.referenceUrl || item.url) score += 4
+  if (item.kind === 'direct' || item.isDirectSource) score += 4
+  if (['detail', 'discussion', 'post'].includes(item.pageType)) score += 4
+
+  return score
+}
+
+function selectEvidenceForAnswer(question = '', evidence = []) {
+  return [...(evidence || [])]
+    .map((item) => ({ ...item, _answerScore: scoreEvidenceForQuestion(question, item) }))
+    .sort((a, b) => b._answerScore - a._answerScore)
+    .slice(0, 4)
+    .map(({ _answerScore, ...item }) => item)
+}
+
+function fallbackAnswerResponse(input, {
+  question,
+  answerLanguage = input.language || 'zh',
+  tone = 'natural',
+  questionPlan = {},
+  evidence = [],
+  resumeProfile
+}) {
+  const language = answerLanguage
+  const likelyEvidence = selectEvidenceForAnswer(question, evidence)
+  const resumeStory = bestResumeBullet(questionPlan?.cluster || question, buildResumeEvidencePool(resumeProfile, input.resume))
+  const supportingEvidence = likelyEvidence
+    .map((item) => ({
+      label: item.source || 'Evidence',
+      url: item.referenceUrl || item.url || item.referenceSearchUrl || item.searchUrl || '',
+      kind: item.referenceUrl || item.url ? 'direct' : 'search'
+    }))
+    .filter((item) => item.url)
+    .slice(0, 3)
+
+  return {
+    question,
+    language,
+    tone,
+    fullAnswer: questionPlan?.sampleAnswer || buildSampleAnswer({
+      keyword: questionPlan?.cluster || question,
+      resumeBullet: resumeStory,
+      company: input.company,
+      role: input.role,
+      language
+    }),
+    shortAnswer: txt(
+      language,
+      `我会优先用「${resumeStory || questionPlan?.cluster || '最相关经历'}」来回答这题，重点讲清任务背景、我的动作和最后结果，并说明为什么这套方法适合 ${input.role}。`,
+      `I would answer this with the story around “${resumeStory || questionPlan?.cluster || 'my closest relevant experience'},” focusing on the context, what I personally drove, the outcome, and why that approach fits the ${input.role} role.`
+    ),
+    answerStructure: uniqueStrings([
+      txt(language, '先给一句结论，说明我最相关的经历是什么。', 'Open with the headline story that best answers the question.'),
+      txt(language, '补充背景和目标，交代任务边界。', 'Add the context and objective so the interviewer understands the stakes.'),
+      txt(language, '展开我亲自做了什么，以及我如何判断和推进。', 'Explain what I personally drove and how I made decisions.'),
+      txt(language, '落到结果、业务影响，以及放到目标岗位的迁移。', 'Close on the outcome, business impact, and how it transfers to the target role.')
+    ], 4),
+    followUps: uniqueStrings([
+      txt(language, '你个人贡献占比是多少？', 'What was your personal ownership in this result?'),
+      txt(language, '这个结果是如何衡量的？', 'How did you measure the result?'),
+      txt(language, '如果重新做一次，你会优化哪一步？', 'What would you improve if you did it again?')
+    ], 3),
+    risks: uniqueStrings([
+      questionPlan?.answerStrategy
+        ? txt(language, `回答时注意：${questionPlan.answerStrategy}`, `Watch out for this in delivery: ${questionPlan.answerStrategy}`)
+        : '',
+      resumeStory
+        ? txt(language, '这题有对应的简历素材，重点是把细节讲实，不要泛化。', 'You do have a matching resume story here, so the main risk is being too vague.')
+        : txt(language, '当前缺少完全直连的简历证据，回答时要保守，不要补编细节。', 'The supporting resume proof is still thin, so keep the answer conservative and do not invent details.')
+    ], 2),
+    evidenceUsed: supportingEvidence,
+    notes: txt(
+      language,
+      '这是保守生成版本。若要更强，需要补齐你的具体指标、个人贡献和结果验证方式。',
+      'This is the conservative fallback version. It will get stronger if you add clearer metrics, ownership, and how the result was verified.'
+    )
+  }
+}
+
+function normalizeAnswerPayload(candidate, fallback) {
+  const evidenceUsed = Array.isArray(candidate?.evidenceUsed)
+    ? candidate.evidenceUsed
+      .map((item) => ({
+        label: normalizeLine(item?.label || ''),
+        url: normalizeLine(item?.url || ''),
+        kind: item?.kind === 'direct' ? 'direct' : 'search'
+      }))
+      .filter((item) => item.label && item.url)
+    : fallback.evidenceUsed
+
+  return {
+    question: normalizeLine(candidate?.question || fallback.question),
+    language: normalizeLine(candidate?.language || fallback.language),
+    tone: normalizeLine(candidate?.tone || fallback.tone),
+    fullAnswer: normalizeLine(candidate?.fullAnswer || fallback.fullAnswer),
+    shortAnswer: normalizeLine(candidate?.shortAnswer || fallback.shortAnswer),
+    answerStructure: uniqueStrings(candidate?.answerStructure || fallback.answerStructure, 5),
+    followUps: uniqueStrings(candidate?.followUps || fallback.followUps, 4),
+    risks: uniqueStrings(candidate?.risks || fallback.risks, 3),
+    evidenceUsed,
+    notes: normalizeLine(candidate?.notes || fallback.notes)
+  }
+}
+
+export async function generatePersonalizedAnswer(input, {
+  question,
+  answerLanguage = input.language || 'zh',
+  answerLength = 'standard',
+  tone = 'natural',
+  questionPlan = {},
+  evidence = []
+} = {}, resumeProfile = parseResumeText(input.resume, input.language)) {
+  const fallback = fallbackAnswerResponse(input, {
+    question,
+    answerLanguage,
+    tone,
+    questionPlan,
+    evidence,
+    resumeProfile
+  })
+
+  const runtime = getAiRuntimeStatus()
+  if (!answerGenerationEnabled || !runtime.configured || !question) {
+    return fallback
+  }
+
+  try {
+    const prompt = buildAnswerPrompt(input, {
+      question,
+      answerLanguage,
+      answerLength,
+      tone,
+      resumeProfile,
+      questionPlan,
+      evidence
+    })
+    const content = await requestStructuredJson(prompt)
+    return normalizeAnswerPayload(JSON.parse(content), fallback)
+  } catch {
+    return fallback
+  }
+}
+
+export async function generateAnswerBatch(input, {
+  questions = [],
+  answerLanguage = input.language || 'zh',
+  answerLength = 'standard',
+  tone = 'natural',
+  evidence = []
+} = {}, resumeProfile = parseResumeText(input.resume, input.language)) {
+  const items = []
+
+  for (const questionItem of questions.slice(0, 6)) {
+    try {
+      const answer = await generatePersonalizedAnswer(input, {
+        question: questionItem.question,
+        answerLanguage,
+        answerLength,
+        tone,
+        questionPlan: questionItem,
+        evidence: selectEvidenceForAnswer(questionItem.question, evidence)
+      }, resumeProfile)
+
+      items.push({
+        cluster: questionItem.cluster || '',
+        ...answer
+      })
+    } catch (error) {
+      items.push({
+        cluster: questionItem.cluster || '',
+        ...fallbackAnswerResponse(input, {
+          question: questionItem.question,
+          answerLanguage,
+          tone,
+          questionPlan: questionItem,
+          evidence,
+          resumeProfile
+        }),
+        notes: truncateText(error.message || '', 120)
+      })
+    }
+  }
+
+  return {
+    items,
+    meta: {
+      provider: getAiRuntimeStatus().provider,
+      configured: getAiRuntimeStatus().configured,
+      answerGenerationEnabled
+    }
   }
 }

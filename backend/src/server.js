@@ -2,6 +2,7 @@ import 'dotenv/config'
 import cors from 'cors'
 import express from 'express'
 import interviewRoutes from './routes/interviewRoutes.js'
+import { getAiRuntimeStatus } from './services/aiService.js'
 import { getCrawlerStatus } from './services/scrapeService.js'
 import { getStorageStatus } from './utils/storage.js'
 
@@ -13,12 +14,12 @@ app.use(express.json({ limit: '1mb' }))
 
 app.get('/', async (_, res) => {
   const storage = await getStorageStatus()
-  res.json({ ok: true, product: 'Interview Navigator API', storage, crawlerStatus: getCrawlerStatus() })
+  res.json({ ok: true, product: 'Interview Navigator API', storage, crawlerStatus: getCrawlerStatus(), aiStatus: getAiRuntimeStatus() })
 })
 
 app.get('/api/health', async (_, res) => {
   const storage = await getStorageStatus()
-  res.json({ ok: true, product: 'Interview Navigator API', storage, crawlerStatus: getCrawlerStatus() })
+  res.json({ ok: true, product: 'Interview Navigator API', storage, crawlerStatus: getCrawlerStatus(), aiStatus: getAiRuntimeStatus() })
 })
 
 app.use('/api/interview', interviewRoutes)

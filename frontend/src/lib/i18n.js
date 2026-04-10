@@ -18,6 +18,7 @@ export const copy = {
     resume: '简历原文',
     generate: '生成准备包',
     generating: '生成中…',
+    generatingAnswers: '答案生成中…',
     uploadResume: '上传简历',
     pasteResume: '粘贴纯文本',
     parseResume: '解析简历',
@@ -78,7 +79,10 @@ export const copy = {
     prepPage: {
       title: '面试准备',
       subtitle: '围绕岗位、JD 和简历证据生成更像真实产品的准备包。',
+      summaryHint: '先生成准备包，再逐题生成属于你的答案。',
       outputTitle: '准备包输出',
+      answerTitle: 'AI 专属答案',
+      answerSubtitle: '基于问题、简历、JD 和证据逐题生成口语化回答。',
       fitTitle: '匹配度分析',
       questionsTitle: '定制问题与答案方向',
       risksTitle: '简历追问风险',
@@ -92,6 +96,12 @@ export const copy = {
       sampleAnswer: '参考答案草稿',
       strategy: '回答策略',
       whyAsked: '为什么会问',
+      fullAnswer: '推荐回答',
+      shortAnswer: '精简版回答',
+      answerStructure: '回答结构提示',
+      followUps: '可被追问的点',
+      answerRisks: '风险提示',
+      evidenceBasis: '证据依据',
       resumeBasis: '已同步的简历',
       resumeMissing: '还没有可用的简历内容。先去“简历上传”页解析，准备页会优先展示预览而不是原始大段文本。',
       manualResumeEdit: '手动修正原始文本（仅在解析错乱时使用）',
@@ -105,7 +115,33 @@ export const copy = {
       scrapeWarnings: '抓取提醒',
       storyAnchors: '答题锚点',
       sourceStatus: '证据源状态',
-      searchRewrite: '搜索改写'
+      searchRewrite: '搜索改写',
+      nextStep: '下一步',
+      generateMyAnswer: '生成我的答案',
+      generateAllAnswers: '生成本岗位答案包',
+      regenAnswer: '重新生成',
+      copyFullAnswer: '复制回答',
+      answerTone: '表达风格',
+      answerLength: '回答长度',
+      aiStatus: 'AI 生成状态',
+      aiReady: '已接入真实 AI',
+      aiFallback: '当前使用保守回退',
+      aiFallbackHint: '如果 AI provider 或 key 未就绪，系统会回退到保守草稿，不会编造简历事实。',
+      answerCount: '已生成答案',
+      noEvidenceYet: '当前还没有足够强的证据链接，系统会优先使用简历事实和 JD。',
+      answerIntro: '先生成这道题的专属答案，系统会把问题、JD、简历和证据放在一起组织成更像真实面试表达的版本。',
+      answerWillUse: '会优先引用你的简历事实和已抓到的高质量证据。',
+      answerWillStayConservative: '如果事实不足，会保守表达并提示补细节，而不是硬编。',
+      tones: {
+        natural: '自然真实',
+        confident: '更有把握',
+        formal: '更正式'
+      },
+      lengths: {
+        short: '短版',
+        standard: '标准版',
+        deep: '深挖版'
+      }
     },
     evidencePage: {
       title: '面经证据',
@@ -128,10 +164,18 @@ export const copy = {
       crawlerEnabled: '已启用站内爬虫',
       crawlerDisabled: '当前仅搜索回退',
       cookieReady: '已检测到可用 cookie',
+      cookieConfigured: 'cookie 已配置',
       cookieMissing: '未配置 cookie',
       cookieInvalid: 'cookie 可能已失效',
+      cookieInvalidHint: '站点仍然要求登录，建议刷新 cookie 后再试。',
       cookieUnknown: 'cookie 状态待确认',
       fallbackMode: '当前仍有部分结果来自搜索回退',
+      browserReady: '浏览器运行正常',
+      browserUnavailable: '服务端浏览器未就绪',
+      browserFallback: '站内抓取暂时不可用，系统已自动回退为公开搜索结果。',
+      sourceBlocked: '当前来源疑似触发访问限制',
+      viewDiagnostics: '查看诊断',
+      browserStatus: '浏览器运行状态',
       sourceCount: '候选数',
       liveHint: '如果要看到更多真实原帖，需要在后端打开站内爬虫并配置登录态 cookie。'
     },
@@ -154,7 +198,8 @@ export const copy = {
     },
     errors: {
       generate: '准备包生成失败，请稍后再试。',
-      parse: '简历解析失败，请检查文件格式或稍后重试。'
+      parse: '简历解析失败，请检查文件格式或稍后重试。',
+      answerGenerate: '个性化答案生成失败，请稍后重试。'
     }
   },
   en: {
@@ -176,6 +221,7 @@ export const copy = {
     resume: 'Resume raw text',
     generate: 'Generate prep pack',
     generating: 'Generating…',
+    generatingAnswers: 'Generating answers…',
     uploadResume: 'Upload resume',
     pasteResume: 'Paste plain text',
     parseResume: 'Parse resume',
@@ -236,7 +282,10 @@ export const copy = {
     prepPage: {
       title: 'Prep builder',
       subtitle: 'Build a more product-grade prep pack from the company, JD, and parsed resume evidence.',
+      summaryHint: 'Generate the prep pack first, then create personalized answers question by question.',
       outputTitle: 'Prep pack',
+      answerTitle: 'AI answer studio',
+      answerSubtitle: 'Generate spoken answers from the question, JD, resume, and evidence together.',
       fitTitle: 'Fit analysis',
       questionsTitle: 'Tailored questions and answer directions',
       risksTitle: 'Resume risk review',
@@ -250,6 +299,12 @@ export const copy = {
       sampleAnswer: 'Sample answer draft',
       strategy: 'Answer strategy',
       whyAsked: 'Why this gets asked',
+      fullAnswer: 'Full answer',
+      shortAnswer: 'Short answer',
+      answerStructure: 'Answer structure',
+      followUps: 'Likely follow-ups',
+      answerRisks: 'Risk notes',
+      evidenceBasis: 'Evidence basis',
       resumeBasis: 'Synced resume',
       resumeMissing: 'There is no parsed resume yet. Upload and parse it first so this page can show a preview instead of a huge raw-text area.',
       manualResumeEdit: 'Manually edit raw resume text (only if parsing is broken)',
@@ -263,7 +318,33 @@ export const copy = {
       scrapeWarnings: 'Scrape warnings',
       storyAnchors: 'Story anchors',
       sourceStatus: 'Evidence source status',
-      searchRewrite: 'Search rewrite'
+      searchRewrite: 'Search rewrite',
+      nextStep: 'Next step',
+      generateMyAnswer: 'Generate my answer',
+      generateAllAnswers: 'Generate answer pack',
+      regenAnswer: 'Regenerate',
+      copyFullAnswer: 'Copy answer',
+      answerTone: 'Tone',
+      answerLength: 'Length',
+      aiStatus: 'AI status',
+      aiReady: 'Live AI connected',
+      aiFallback: 'Using conservative fallback',
+      aiFallbackHint: 'If the AI provider or key is unavailable, the system falls back to a conservative draft instead of inventing resume facts.',
+      answerCount: 'answers generated',
+      noEvidenceYet: 'There are not enough strong evidence links yet, so the system will lean more on the resume facts and JD.',
+      answerIntro: 'Generate a personalized answer for this question. The system will combine the question, JD, resume, and evidence into something that sounds like a real interview answer.',
+      answerWillUse: 'It will prioritize your real resume facts and the highest-quality evidence.',
+      answerWillStayConservative: 'If the facts are thin, it will stay conservative and flag what to clarify instead of making things up.',
+      tones: {
+        natural: 'Natural',
+        confident: 'Confident',
+        formal: 'Formal'
+      },
+      lengths: {
+        short: 'Short',
+        standard: 'Standard',
+        deep: 'Deep'
+      }
     },
     evidencePage: {
       title: 'Evidence library',
@@ -286,10 +367,18 @@ export const copy = {
       crawlerEnabled: 'Crawler enabled',
       crawlerDisabled: 'Search fallback only',
       cookieReady: 'Cookie looks available',
+      cookieConfigured: 'Cookie configured',
       cookieMissing: 'Cookie is missing',
       cookieInvalid: 'Cookie may be invalid',
+      cookieInvalidHint: 'The site still appears to require login, so refresh the cookie and try again.',
       cookieUnknown: 'Cookie status unknown',
       fallbackMode: 'Some results still come from search fallback',
+      browserReady: 'Browser runtime ready',
+      browserUnavailable: 'Server browser runtime unavailable',
+      browserFallback: 'Live site crawling is temporarily unavailable, so the product has fallen back to public search results.',
+      sourceBlocked: 'This source appears temporarily blocked',
+      viewDiagnostics: 'View diagnostics',
+      browserStatus: 'Browser runtime status',
       sourceCount: 'Candidates',
       liveHint: 'If you want more real source links, enable the site crawlers in the backend and provide valid cookies.'
     },
@@ -312,7 +401,8 @@ export const copy = {
     },
     errors: {
       generate: 'Prep pack generation failed. Please try again later.',
-      parse: 'Resume parsing failed. Please check the file format or try again later.'
+      parse: 'Resume parsing failed. Please check the file format or try again later.',
+      answerGenerate: 'Personalized answer generation failed. Please try again later.'
     }
   }
 }

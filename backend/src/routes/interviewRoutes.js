@@ -2,9 +2,9 @@ import { Router } from 'express'
 import multer from 'multer'
 import { z } from 'zod'
 import { retrieveInterviewSignals } from '../services/retrievalService.js'
-import { generateInterviewPack } from '../services/aiService.js'
+import { generateAnswerBatch, generateInterviewPack, generatePersonalizedAnswer, getAiRuntimeStatus } from '../services/aiService.js'
 import { buildScrapeNextStep, getCrawlerStatus, getScrapeConfig, runLiveScrape } from '../services/scrapeService.js'
-import { analyzeResumeText, parseResumeFile } from '../services/resumeService.js'
+import { analyzeResumeText, parseResumeFile, parseResumeText } from '../services/resumeService.js'
 import { countFeedback, getStorageStatus, listSessions, saveFeedback, saveSession } from '../utils/storage.js'
 
 const router = Router()
@@ -18,6 +18,33 @@ const interviewSchema = z.object({
   interviewType: z.string().min(1),
   language: z.enum(['zh', 'en']).default('zh')
 })
+
+const evidenceItemSchema = z.object({
+  source: z.string().default(''),
+  title: z.string().default(''),
+  question: z.string().default(''),
+  notes: z.string().default(''),
+  snippet: z.string().default(''),
+  whyMatched: z.string().default(''),
+  referenceUrl: z.string().default(''),
+  referenceSearchUrl: z.string().default(''),
+  url: z.string().default(''),
+  kind: z.string().default(''),
+  pageType: z.string().default(''),
+  score: z.number().optional()
+}).passthrough()
+
+const questionPlanSchema = z.object({
+  cluster: z.string().default(''),
+  question: z.string().min(1),
+  whyAsked: z.string().default(''),
+  answerStrategy: z.string().default(''),
+  sampleAnswer: z.string().default(''),
+  supportingEvidence: z.array(z.object({
+    label: z.string().default(''),
+    url: z.string().default('')
+  })).default([])
+}).passthrough()
 
 router.post('/generate', async (req, res) => {
   try {
@@ -44,10 +71,75 @@ router.post('/generate', async (req, res) => {
       data: result,
       retrieval,
       scrape,
-      resumeProfile
+      resumeProfile,
+      aiStatus: getAiRuntimeStatus()
     })
   } catch (error) {
     console.error('[interview/generate] failed:', error.message)
+    res.status(400).json({ ok: false, message: error.message })
+  }
+})
+
+router.post('/answers/generate', async (req, res) => {
+  try {
+    const schema = interviewSchema.extend({
+      question: z.string().min(1),
+      questionPlan: questionPlanSchema.optional(),
+      evidence: z.array(evidenceItemSchema).default([]),
+      answerLanguage: z.enum(['zh', 'en']).optional(),
+      answerLength: z.enum(['short', 'standard', 'deep']).optional().default('standard'),
+      tone: z.enum(['natural', 'confident', 'formal']).optional().default('natural')
+    })
+
+    const input = schema.parse(req.body)
+    const resumeProfile = parseResumeText(input.resume, input.answerLanguage || input.language)
+    const answer = await generatePersonalizedAnswer(input, {
+      question: input.question,
+      answerLanguage: input.answerLanguage || input.language,
+      answerLength: input.answerLength,
+      tone: input.tone,
+      questionPlan: input.questionPlan || { question: input.question },
+      evidence: input.evidence || []
+    }, resumeProfile)
+
+    res.json({
+      ok: true,
+      data: answer,
+      aiStatus: getAiRuntimeStatus()
+    })
+  } catch (error) {
+    console.error('[interview/answers-generate] failed:', error.message)
+    res.status(400).json({ ok: false, message: error.message })
+  }
+})
+
+router.post('/answers/batch', async (req, res) => {
+  try {
+    const schema = interviewSchema.extend({
+      questions: z.array(questionPlanSchema).min(1),
+      evidence: z.array(evidenceItemSchema).default([]),
+      answerLanguage: z.enum(['zh', 'en']).optional(),
+      answerLength: z.enum(['short', 'standard', 'deep']).optional().default('standard'),
+      tone: z.enum(['natural', 'confident', 'formal']).optional().default('natural')
+    })
+
+    const input = schema.parse(req.body)
+    const resumeProfile = parseResumeText(input.resume, input.answerLanguage || input.language)
+    const batch = await generateAnswerBatch(input, {
+      questions: input.questions,
+      answerLanguage: input.answerLanguage || input.language,
+      answerLength: input.answerLength,
+      tone: input.tone,
+      evidence: input.evidence || []
+    }, resumeProfile)
+
+    res.json({
+      ok: true,
+      data: batch,
+      aiStatus: getAiRuntimeStatus()
+    })
+  } catch (error) {
+    console.error('[interview/answers-batch] failed:', error.message)
     res.status(400).json({ ok: false, message: error.message })
   }
 })
@@ -135,7 +227,8 @@ router.get('/workspace/bootstrap', async (req, res) => {
         feedbackCount,
         recentSessions,
         storage,
-        crawlerStatus: getCrawlerStatus()
+        crawlerStatus: getCrawlerStatus(),
+        aiStatus: getAiRuntimeStatus()
       }
     })
   } catch (error) {

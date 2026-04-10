@@ -5,15 +5,17 @@ This repo now behaves more like a real interview-prep product instead of a demo.
 ## What changed
 
 - Chinese-source search is rewritten automatically for Nowcoder and Xiaohongshu.
+- Render installs Playwright Chromium during backend build and exposes browser runtime diagnostics.
 - Live scrape results are filtered and ranked toward real post/detail pages.
 - Direct source links and search fallbacks are clearly separated in the UI.
 - Resume parsing is more conservative and now separates priority rewrites, optional polish, and keep-as-is lines.
 - Workspace bootstrap and health checks expose crawler + cookie status.
+- AI answer generation is now available through the backend and can use OpenAI or Anthropic.
 
 ## Key backend endpoints
 
 - `GET /api/health`
-  Returns storage mode and crawler status.
+  Returns storage mode, crawler status, and AI runtime status.
 - `GET /api/interview/crawler/status`
   Returns per-source crawler state:
   - `crawlerEnabled`
@@ -22,6 +24,12 @@ This repo now behaves more like a real interview-prep product instead of a demo.
   - `cookieInjectedLastRun`
   - `authenticatedLikely`
   - `lastError`
+  And global browser runtime state:
+  - `playwrightInstalled`
+  - `browserExecutableFound`
+  - `browserRuntimeReady`
+  - `browserPath`
+  - `liveScrapeAvailable`
 - `GET /api/interview/scrape/debug?company=...&role=...&interviewType=...`
   Returns:
   - rewritten Chinese queries by source
@@ -29,6 +37,10 @@ This repo now behaves more like a real interview-prep product instead of a demo.
   - filtered result count
   - excluded candidates and reasons
   - per-source diagnostics
+- `POST /api/interview/answers/generate`
+  Generates one personalized answer for a selected interview question.
+- `POST /api/interview/answers/batch`
+  Generates a full answer pack for the current question set.
 
 ## Chinese query rewriting
 
@@ -70,19 +82,31 @@ Current deployment shape stays the same:
 
 - Frontend: Vercel
 - Backend: Render
-- LLM: OpenAI API
+- LLM: OpenAI / Anthropic (provider switch)
 
 Important environment variables on Render:
 
 - `OPENAI_API_KEY`
+- `AI_PROVIDER`
+- `RESUME_AI_PROVIDER` (`anthropic` recommended for resume coach)
+- `AI_ANSWER_ENABLED`
+- `ANTHROPIC_API_KEY` if you want Claude
+- `ANTHROPIC_MODEL`
 - `DATABASE_URL` when database mode is enabled
 - `DATABASE_SSL`
 - `ALLOW_LIVE_SCRAPE`
 - `PLAYWRIGHT_HEADLESS`
+- `PLAYWRIGHT_BROWSERS_PATH=0`
 - `SCRAPE_TIMEOUT_MS`
 - `NOWCODER_COOKIE`
 - `XIAOHONGSHU_COOKIE`
 - `ALLOWED_ORIGIN`
+
+Render build note:
+
+- Backend `package.json` now runs `playwright install chromium` in `postinstall`.
+- `render.yaml` keeps the normal `npm install` build step, and the browser download happens during that install so the Chromium executable exists after deploy.
+- If `crawler/status` shows `browserRuntimeReady=false`, the deployment did not finish with a usable Chromium binary yet.
 
 Important environment variables on Vercel:
 
@@ -97,17 +121,21 @@ Important environment variables on Vercel:
 5. Confirm returned results are mostly post/detail URLs instead of landing pages.
 6. Generate a prep pack and verify the evidence page shows:
    - source status cards
-   - query rewrite notes
    - direct vs fallback labels
+   - diagnostics hidden behind a collapsible details panel
 7. Upload a resume and verify the resume page shows:
    - structured preview
    - top 3-5 rewrite priorities
    - optional polish
    - keep-as-is lines
    - compact story bank
+8. In the prep page, generate one answer and then the full answer pack:
+   - each answer should include full answer, short answer, follow-ups, and risks
+   - answers should reference resume facts and evidence links when available
 
 ## Known limits
 
 - Xiaohongshu and Nowcoder may still change DOM structure, add stronger anti-bot checks, or block headless sessions.
 - Snippets are extracted from search/list pages, not full article bodies.
 - If a site shows login walls or captcha, cookie status may remain `unknown` until a successful authenticated run.
+- Anthropic mode uses direct HTTP calls and requires `ANTHROPIC_API_KEY`; OpenAI remains the default.

@@ -3,6 +3,8 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes } from 'react-router-do
 import { copy } from './lib/i18n'
 import { apiUrl } from './lib/api'
 
+const SHOW_DEBUG_PANEL = import.meta.env.DEV || import.meta.env.VITE_SHOW_DEBUG === 'true'
+
 const defaultForm = {
   company: '',
   role: '',
@@ -26,7 +28,8 @@ const defaultBootstrap = {
   feedbackCount: 0,
   recentSessions: [],
   storage: null,
-  crawlerStatus: null
+  crawlerStatus: null,
+  aiStatus: null
 }
 
 function escapeHtml(value = '') {
@@ -49,8 +52,39 @@ function buildDocList(items = []) {
   return items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')
 }
 
-function buildCheatSheetDoc({ form, pack, resumeProfile }) {
+function buildAnswerKey(item = {}) {
+  return slugify(`${item.cluster || ''}-${item.question || ''}`) || String(item.question || item.cluster || '')
+}
+
+function cleanUiMessage(value = '') {
+  return String(value)
+    .replace(/\u001b\[[0-9;]*m/g, ' ')
+    .replace(/[─-╿▀-▟]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function copyTextValue(value = '') {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+  } catch {
+    const textarea = document.createElement('textarea')
+    textarea.value = value
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    textarea.remove()
+  }
+}
+
+function flattenAnswerBook(answerBook = {}) {
+  return Object.values(answerBook || {}).filter((item) => item?.question)
+}
+
+function buildCheatSheetDoc({ form, pack, resumeProfile, answerBook }) {
   const title = `${form.company || 'Interview'}-${form.role || 'Prep'}-cheatsheet`
+  const answers = flattenAnswerBook(answerBook)
   const html = `
   <html>
     <head>
@@ -105,6 +139,20 @@ function buildCheatSheetDoc({ form, pack, resumeProfile }) {
         `).join('')}
       </div>
 
+      ${answers.length ? `
+      <div class="section">
+        <h2>Personalized Answers</h2>
+        ${answers.map((item) => `
+          <div class="card">
+            <h3>${escapeHtml(item.question || '')}</h3>
+            <p><strong>Full answer:</strong> ${escapeHtml(item.fullAnswer || '')}</p>
+            <p><strong>Short answer:</strong> ${escapeHtml(item.shortAnswer || '')}</p>
+            <p><strong>Follow-ups:</strong> ${escapeHtml((item.followUps || []).join(' | '))}</p>
+            <p><strong>Risks:</strong> ${escapeHtml((item.risks || []).join(' | '))}</p>
+          </div>
+        `).join('')}
+      </div>` : ''}
+
       <div class="section">
         <h2>Resume Rewrite Priorities</h2>
         ${(pack?.resumeRisks || []).map((item) => `
@@ -130,9 +178,9 @@ function buildCheatSheetDoc({ form, pack, resumeProfile }) {
   }
 }
 
-function downloadCheatSheetDoc({ form, pack, resumeProfile }) {
+function downloadCheatSheetDoc({ form, pack, resumeProfile, answerBook }) {
   if (!pack) return
-  const { fileName, html } = buildCheatSheetDoc({ form, pack, resumeProfile })
+  const { fileName, html } = buildCheatSheetDoc({ form, pack, resumeProfile, answerBook })
   const blob = new Blob(['\ufeff', html], { type: 'application/msword;charset=utf-8' })
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -166,6 +214,14 @@ function buildRewriteRows(scrapeState) {
 }
 
 function describeCrawlerSource(source, t) {
+  if (!source?.liveScrapeAvailable && source?.crawlerEnabled) {
+    return {
+      tone: 'warning',
+      headline: t.evidencePage.browserUnavailable,
+      helper: t.evidencePage.browserFallback
+    }
+  }
+
   if (!source?.crawlerEnabled) {
     return {
       tone: 'warning',
@@ -194,14 +250,14 @@ function describeCrawlerSource(source, t) {
     return {
       tone: 'danger',
       headline: t.evidencePage.cookieInvalid,
-      helper: source.lastError || t.evidencePage.fallbackMode
+      helper: t.evidencePage.cookieInvalidHint
     }
   }
 
   return {
     tone: 'warning',
     headline: t.evidencePage.cookieUnknown,
-    helper: source.antiBotDetected ? 'anti-bot detected' : t.evidencePage.fallbackMode
+    helper: source.antiBotDetected ? t.evidencePage.sourceBlocked : t.evidencePage.fallbackMode
   }
 }
 
@@ -302,14 +358,16 @@ function SourceStatusCard({ source, t, language }) {
     <article className={`source-status-card ${meta.tone}`}>
       <div className="source-status-top">
         <strong>{source.source}</strong>
-        <span className={`pill ${meta.tone === 'success' ? 'solid' : meta.tone === 'danger' ? 'danger' : 'subtle'}`}>{meta.headline}</span>
+        <div className="pill-row">
+          <span className={`pill ${meta.tone === 'success' ? 'solid' : meta.tone === 'danger' ? 'danger' : 'subtle'}`}>{meta.headline}</span>
+          <span className="pill">{source.candidateCount ?? 0} {t.evidencePage.sourceCount}</span>
+        </div>
       </div>
       <p>{meta.helper}</p>
       <div className="source-status-meta">
-        <span>{t.evidencePage.sourceCount}: {source.candidateCount ?? 0}</span>
         <span>{t.evidencePage.lastChecked}: {formatTime(source.lastCheckedAt, language)}</span>
+        <span>{source.cookieConfigured ? t.evidencePage.cookieConfigured : t.evidencePage.cookieMissing}</span>
       </div>
-      {source.lastError ? <small>{t.evidencePage.lastError}: {source.lastError}</small> : null}
     </article>
   )
 }
@@ -333,6 +391,154 @@ function RewriteNote({ rows, t }) {
         ))}
       </div>
     </div>
+  )
+}
+
+function DiagnosticsPanel({ scrapeState, crawlerStatus, t }) {
+  const warnings = scrapeState?.warnings || scrapeState?.debug?.sourceDiagnostics?.flatMap((item) => item?.warnings || []) || []
+  const diagnostics = scrapeState?.debug?.sourceDiagnostics || []
+  const rewriteRows = buildRewriteRows(scrapeState)
+
+  if (!crawlerStatus && !warnings.length && !diagnostics.length && !rewriteRows.length) return null
+
+  return (
+    <details className="details-panel debug-panel">
+      <summary>{t.evidencePage.viewDiagnostics}</summary>
+      <div className="diagnostics-stack">
+        {crawlerStatus ? (
+          <article className="diagnostic-card">
+            <h5>{t.evidencePage.browserStatus}</h5>
+            <div className="pill-row">
+              <span className={`pill ${crawlerStatus.browserRuntimeReady ? 'solid' : 'danger'}`}>{crawlerStatus.browserRuntimeReady ? t.evidencePage.browserReady : t.evidencePage.browserUnavailable}</span>
+              <span className="pill">{crawlerStatus.playwrightInstalled ? 'Playwright ready' : 'Playwright missing'}</span>
+              <span className={`pill ${crawlerStatus.liveScrapeAvailable ? 'subtle' : 'danger'}`}>{crawlerStatus.liveScrapeAvailable ? t.evidencePage.crawlerEnabled : t.evidencePage.crawlerDisabled}</span>
+            </div>
+            {crawlerStatus.browserPath ? <p><span className="mini-label">Path</span>{crawlerStatus.browserPath}</p> : null}
+            {crawlerStatus.browserIssue ? <p><span className="mini-label">{t.evidencePage.lastError}</span>{crawlerStatus.browserIssue}</p> : null}
+          </article>
+        ) : null}
+
+        {warnings.length ? (
+          <article className="diagnostic-card">
+            <h5>{t.evidencePage.warnings}</h5>
+            <ul className="bullet-list">
+              {warnings.map((item) => <li key={item}>{cleanUiMessage(item)}</li>)}
+            </ul>
+          </article>
+        ) : null}
+
+        {rewriteRows.length ? <RewriteNote rows={rewriteRows} t={t} /> : null}
+
+        {diagnostics.length ? (
+          <article className="diagnostic-card">
+            <h5>{t.evidencePage.statusTitle}</h5>
+            <div className="diagnostic-list">
+              {diagnostics.map((item) => (
+                <div className="diagnostic-item" key={item.source}>
+                  <strong>{item.source}</strong>
+                  <p>{item.candidateCount ?? 0} {t.evidencePage.sourceCount}</p>
+                  {item.lastError ? <small>{cleanUiMessage(item.lastError)}</small> : null}
+                  {item.queryStats?.length ? (
+                    <ul className="bullet-list compact-list">
+                      {item.queryStats.slice(0, 3).map((stat) => (
+                        <li key={`${item.source}-${stat.query}`}>
+                          {stat.query}
+                          {stat.pageWarning ? ` · ${cleanUiMessage(stat.pageWarning)}` : ''}
+                          {stat.error ? ` · ${cleanUiMessage(stat.error)}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </article>
+        ) : null}
+
+        {scrapeState?.debug?.nextStep ? (
+          <article className="diagnostic-card">
+            <h5>{t.prepPage.nextStep}</h5>
+            <p>{cleanUiMessage(scrapeState.debug.nextStep)}</p>
+          </article>
+        ) : null}
+      </div>
+    </details>
+  )
+}
+
+function AnswerOutputCard({ item, answer, loading, t, onGenerate }) {
+  const answerKey = buildAnswerKey(item)
+
+  return (
+    <article className="answer-card" key={answerKey}>
+      <div className="answer-card-head">
+        <div>
+          <span className="pill solid">{item.cluster}</span>
+          <h4>{item.question}</h4>
+        </div>
+        <div className="actions-row">
+          <button type="button" className="secondary-button" onClick={() => onGenerate(item)} disabled={loading}>
+            {loading ? t.generatingAnswers : answer ? t.prepPage.regenAnswer : t.prepPage.generateMyAnswer}
+          </button>
+          {answer?.fullAnswer ? (
+            <button type="button" className="secondary-button" onClick={() => copyTextValue(answer.fullAnswer)}>
+              {t.prepPage.copyFullAnswer}
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="answer-question-meta">
+        <p><strong>{t.prepPage.whyAsked}:</strong> {item.whyAsked}</p>
+        <p><strong>{t.prepPage.strategy}:</strong> {item.answerStrategy}</p>
+      </div>
+
+      {answer ? (
+        <div className="answer-content-grid">
+          <div className="answer-panel">
+            <h5>{t.prepPage.fullAnswer}</h5>
+            <p>{answer.fullAnswer}</p>
+          </div>
+          <div className="answer-panel subtle-panel">
+            <h5>{t.prepPage.shortAnswer}</h5>
+            <p>{answer.shortAnswer}</p>
+          </div>
+          <div className="answer-panel">
+            <h5>{t.prepPage.answerStructure}</h5>
+            <ul className="bullet-list">{(answer.answerStructure || []).map((step) => <li key={step}>{step}</li>)}</ul>
+          </div>
+          <div className="answer-panel">
+            <h5>{t.prepPage.followUps}</h5>
+            <ul className="bullet-list">{(answer.followUps || []).map((followUp) => <li key={followUp}>{followUp}</li>)}</ul>
+          </div>
+          <div className="answer-panel">
+            <h5>{t.prepPage.answerRisks}</h5>
+            <ul className="bullet-list">{(answer.risks || []).map((risk) => <li key={risk}>{risk}</li>)}</ul>
+          </div>
+          <div className="answer-panel">
+            <h5>{t.prepPage.evidenceBasis}</h5>
+            {(answer.evidenceUsed || []).length ? (
+              <div className="link-row">
+                {answer.evidenceUsed.map((ref, index) => (
+                  <a key={`${ref.label}-${index}`} href={ref.url} target="_blank" rel="noreferrer" className="link-pill">
+                    {ref.kind === 'direct' ? t.sourceOpen : t.sourceSearch}
+                  </a>
+                ))}
+              </div>
+            ) : <p>{t.prepPage.noEvidenceYet}</p>}
+            {answer.notes ? <small>{answer.notes}</small> : null}
+          </div>
+        </div>
+      ) : (
+        <div className="answer-empty-state">
+          <p>{t.prepPage.answerIntro}</p>
+          <ul className="bullet-list">
+            <li>{t.prepPage.answerWillUse}</li>
+            <li>{t.prepPage.answerWillStayConservative}</li>
+          </ul>
+        </div>
+      )}
+    </article>
   )
 }
 
@@ -572,219 +778,266 @@ function ResumePage({ t, form, setForm, resumeProfile, setResumeProfile, resumeP
   )
 }
 
-function PrepPage({ t, form, setForm, resumeProfile, pack, insights, scrapeState, crawlerStatus, loading, generateError, onGenerate, onDownloadDoc }) {
-  const evidenceMeta = pack?.evidence?.meta
+function PrepPage({
+  t,
+  form,
+  setForm,
+  resumeProfile,
+  pack,
+  scrapeState,
+  crawlerStatus,
+  aiStatus,
+  loading,
+  generateError,
+  answerBook,
+  answerLoadingMap,
+  batchGenerating,
+  answerOptions,
+  setAnswerOptions,
+  onGenerate,
+  onGenerateAnswer,
+  onGenerateAllAnswers,
+  onDownloadDoc
+}) {
+  const evidenceMeta = pack?.evidence?.meta || {}
   const currentCrawlerStatus = scrapeState?.crawlerStatus || crawlerStatus
-  const rewriteRows = buildRewriteRows(scrapeState)
+  const answers = flattenAnswerBook(answerBook)
+  const aiReady = aiStatus?.answerGenerationEnabled && aiStatus?.configured
 
   return (
-    <div className="page-grid two-column">
-      <ShellCard title={t.prepPage.title} subtitle={t.prepPage.subtitle}>
-        <form className="form-grid" onSubmit={onGenerate}>
-          <Field label={t.company}><input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} /></Field>
-          <Field label={t.role}><input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} /></Field>
-          <Field label={t.interviewType}>
-            <select value={form.interviewType} onChange={(e) => setForm({ ...form, interviewType: e.target.value })}>
-              {Object.entries(t.types).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </Field>
-          <Field label={t.languageOutput}>
-            <div className="inline-toggle">
-              <button type="button" className={form.language === 'zh' ? 'active' : ''} onClick={() => setForm({ ...form, language: 'zh' })}>中文</button>
-              <button type="button" className={form.language === 'en' ? 'active' : ''} onClick={() => setForm({ ...form, language: 'en' })}>EN</button>
-            </div>
-          </Field>
-          <Field label={t.jd} full><textarea rows="8" value={form.jd} onChange={(e) => setForm({ ...form, jd: e.target.value })} /></Field>
-          <Field label={t.prepPage.resumeBasis} full>
-            <div className="surface-panel snapshot-panel">
-              {resumeProfile ? (
-                <>
-                  <div className="surface-panel-head">
-                    <strong>{resumeProfile.summary}</strong>
-                  </div>
-                  <ResumePreview t={t} resumeProfile={resumeProfile} compact />
-                </>
-              ) : <p className="empty-copy">{t.prepPage.resumeMissing}</p>}
-            </div>
-          </Field>
-          <details className="details-panel full">
-            <summary>{t.prepPage.manualResumeEdit}</summary>
-            <textarea rows="8" value={form.resume} onChange={(e) => setForm({ ...form, resume: e.target.value })} />
-          </details>
-          <div className="actions-row full">
-            <button className="primary-button" disabled={loading || !form.company.trim() || !form.role.trim() || !form.jd.trim() || !form.resume.trim()}>{loading ? t.generating : t.generate}</button>
-            <p className="helper-line">{t.helperGenerate}</p>
-          </div>
-          {generateError ? <div className="status-banner error full">{generateError}</div> : null}
-        </form>
-      </ShellCard>
-
-      <ShellCard
-        title={t.prepPage.outputTitle}
-        subtitle={pack?.fitReview?.summary || t.noPack}
-        actions={pack ? <button type="button" className="secondary-button" onClick={onDownloadDoc}>{t.prepPage.downloadDoc}</button> : null}
-      >
-        {!pack ? <p className="empty-copy">{t.noPack}</p> : (
-          <div className="stacked-sections">
-            {(currentCrawlerStatus?.sources || []).length ? (
-              <div className="section-block">
-                <h4>{t.prepPage.sourceStatus}</h4>
-                <div className="source-status-grid compact-grid">
-                  {currentCrawlerStatus.sources.map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={form.language} />)}
-                </div>
+    <div className="prep-layout">
+      <div className="prep-main">
+        <ShellCard title={t.prepPage.title} subtitle={t.prepPage.subtitle}>
+          <form className="form-grid" onSubmit={onGenerate}>
+            <Field label={t.company}><input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} /></Field>
+            <Field label={t.role}><input value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} /></Field>
+            <Field label={t.interviewType}>
+              <select value={form.interviewType} onChange={(e) => setForm({ ...form, interviewType: e.target.value })}>
+                {Object.entries(t.types).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+            <Field label={t.languageOutput}>
+              <div className="inline-toggle">
+                <button type="button" className={form.language === 'zh' ? 'active' : ''} onClick={() => setForm({ ...form, language: 'zh' })}>中文</button>
+                <button type="button" className={form.language === 'en' ? 'active' : ''} onClick={() => setForm({ ...form, language: 'en' })}>EN</button>
               </div>
-            ) : null}
-
-            {rewriteRows.length ? (
-              <div className="section-block">
-                <h4>{t.prepPage.searchRewrite}</h4>
-                <RewriteNote rows={rewriteRows} t={t} />
-              </div>
-            ) : null}
-
-            <div className="section-block">
-              <h4>{t.prepPage.fitTitle}</h4>
-              <div className="score-strip">
-                <strong>{pack.fitReview?.overallScore ?? '—'}</strong>
-                <span>{pack.fitReview?.summary}</span>
-              </div>
-
-              <div className="keyword-grid">
-                <div className="keyword-block">
-                  <h5>{t.prepPage.matchedKeywords}</h5>
-                  <div className="pill-row">
-                    {(pack.fitReview?.matchedKeywords || []).map((item) => <span key={item} className="pill solid">{item}</span>)}
-                  </div>
-                </div>
-                <div className="keyword-block">
-                  <h5>{t.prepPage.missingKeywords}</h5>
-                  <div className="pill-row">
-                    {(pack.fitReview?.missingKeywords || []).map((item) => <span key={item} className="pill danger">{item}</span>)}
-                  </div>
-                </div>
-              </div>
-
-              <div className="two-lists">
-                <div>
-                  <h5>{t.prepPage.strengths}</h5>
-                  <ul className="bullet-list">{pack.fitReview?.strengths?.map((item) => <li key={item}>{item}</li>)}</ul>
-                </div>
-                <div>
-                  <h5>{t.prepPage.gaps}</h5>
-                  <ul className="bullet-list">{pack.fitReview?.gaps?.map((item) => <li key={item}>{item}</li>)}</ul>
-                </div>
-              </div>
-
-              <div>
-                <h5>{t.prepPage.dimensions}</h5>
-                <div className="dimension-list">{pack.fitReview?.dimensions?.map((item) => (
-                  <div key={item.label} className="dimension-item">
-                    <div>
-                      <strong>{item.label}</strong>
-                      <span>{item.reason}</span>
-                      {item.evidence?.length ? <div className="pill-row evidence-inline">{item.evidence.map((evidence) => <span key={evidence} className="pill subtle">{evidence}</span>)}</div> : null}
+            </Field>
+            <Field label={t.jd} full><textarea rows="8" value={form.jd} onChange={(e) => setForm({ ...form, jd: e.target.value })} /></Field>
+            <Field label={t.prepPage.resumeBasis} full>
+              <div className="surface-panel snapshot-panel">
+                {resumeProfile ? (
+                  <>
+                    <div className="surface-panel-head">
+                      <strong>{resumeProfile.summary}</strong>
                     </div>
-                    <b>{item.score}</b>
-                  </div>
-                ))}</div>
+                    <ResumePreview t={t} resumeProfile={resumeProfile} compact />
+                  </>
+                ) : <p className="empty-copy">{t.prepPage.resumeMissing}</p>}
+              </div>
+            </Field>
+            <details className="details-panel full">
+              <summary>{t.prepPage.manualResumeEdit}</summary>
+              <textarea rows="8" value={form.resume} onChange={(e) => setForm({ ...form, resume: e.target.value })} />
+            </details>
+            <div className="actions-row full">
+              <button className="primary-button" disabled={loading || !form.company.trim() || !form.role.trim() || !form.jd.trim() || !form.resume.trim()}>{loading ? t.generating : t.generate}</button>
+              <p className="helper-line">{t.helperGenerate}</p>
+            </div>
+            {generateError ? <div className="status-banner error full">{generateError}</div> : null}
+          </form>
+        </ShellCard>
+
+        {pack ? (
+          <>
+            <ShellCard
+              title={t.prepPage.answerTitle}
+              subtitle={t.prepPage.answerSubtitle}
+              actions={(
+                <div className="actions-row">
+                  <button type="button" className="secondary-button" onClick={onGenerateAllAnswers} disabled={batchGenerating || !pack?.answerDrafts?.length}>
+                    {batchGenerating ? t.generatingAnswers : t.prepPage.generateAllAnswers}
+                  </button>
+                </div>
+              )}
+            >
+              <div className="answer-toolbar">
+                <Field label={t.prepPage.answerTone}>
+                  <select value={answerOptions.tone} onChange={(e) => setAnswerOptions((prev) => ({ ...prev, tone: e.target.value }))}>
+                    <option value="natural">{t.prepPage.tones.natural}</option>
+                    <option value="confident">{t.prepPage.tones.confident}</option>
+                    <option value="formal">{t.prepPage.tones.formal}</option>
+                  </select>
+                </Field>
+                <Field label={t.prepPage.answerLength}>
+                  <select value={answerOptions.answerLength} onChange={(e) => setAnswerOptions((prev) => ({ ...prev, answerLength: e.target.value }))}>
+                    <option value="short">{t.prepPage.lengths.short}</option>
+                    <option value="standard">{t.prepPage.lengths.standard}</option>
+                    <option value="deep">{t.prepPage.lengths.deep}</option>
+                  </select>
+                </Field>
+                <div className="ai-runtime-card">
+                  <span className="mini-label">{t.prepPage.aiStatus}</span>
+                  <strong>{aiReady ? t.prepPage.aiReady : t.prepPage.aiFallback}</strong>
+                  <small>{aiStatus?.model || '—'}</small>
+                </div>
               </div>
 
-              {!evidenceMeta?.preferredDirectCount && evidenceMeta?.searchFallbackCount ? <div className="status-banner warning">{t.prepPage.scrapeDisabled}</div> : null}
-              {evidenceMeta?.warnings?.length ? <div className="status-banner warning">{t.prepPage.scrapeWarnings}: {evidenceMeta.warnings.join(' | ')}</div> : null}
-            </div>
+              {!aiReady ? <div className="status-banner warning">{t.prepPage.aiFallbackHint}</div> : null}
 
-            <div className="section-block">
-              <h4>{t.prepPage.questionsTitle}</h4>
-              <div className="qa-list">{pack.answerDrafts?.map((item, index) => (
-                <article className="qa-item" key={`${item.cluster}-${index}`}>
-                  <div className="qa-head">
-                    <span className="pill solid">{item.cluster}</span>
-                    {item.supportingEvidence?.length ? <span className="mini-note">{item.supportingEvidence.length} evidence matched</span> : null}
-                  </div>
-                  <h5>{item.question}</h5>
-                  <p><strong>{t.prepPage.whyAsked}:</strong> {item.whyAsked}</p>
-                  <p><strong>{t.prepPage.strategy}:</strong> {item.answerStrategy}</p>
-                  <div className="answer-box">
-                    <strong>{t.prepPage.sampleAnswer}</strong>
-                    <p>{item.sampleAnswer}</p>
-                  </div>
-                  <div className="link-row">
-                    {item.supportingEvidence?.map((ref, idx) => ref.url ? <a className="link-pill" key={`${ref.label}-${idx}`} href={ref.url} target="_blank" rel="noreferrer">{ref.label}</a> : null)}
-                  </div>
-                </article>
-              ))}</div>
-            </div>
-
-            <div className="section-block">
-              <h4>{t.prepPage.risksTitle}</h4>
-              <div className="risk-list">{pack.resumeRisks?.map((item, index) => (
-                <article className="risk-item" key={`${item.resumePoint}-${index}`}>
-                  <strong>{item.resumePoint}</strong>
-                  <p>{item.risk}</p>
-                  <small>{item.fix}</small>
-                </article>
-              ))}</div>
-            </div>
-
-            <div className="section-block">
-              <h4>{t.prepPage.roundTitle}</h4>
-              {pack.roundPlan?.map((round) => (
-                <article className="round-card" key={round.round}>
-                  <strong>{round.round}</strong>
-                  <p>{round.focus}</p>
-                  <ul className="bullet-list">{round.questions?.map((question) => <li key={question}>{question}</li>)}</ul>
-                </article>
-              ))}
-            </div>
-
-            <div className="section-block">
-              <h4>{t.prepPage.cheatTitle}</h4>
-              <div className="info-card emphasis-card">
-                <strong>{pack.cheatSheet?.selfIntro}</strong>
+              <div className="answer-list">
+                {(pack.answerDrafts || []).map((item) => (
+                  <AnswerOutputCard
+                    key={buildAnswerKey(item)}
+                    item={item}
+                    answer={answerBook[buildAnswerKey(item)]}
+                    loading={Boolean(answerLoadingMap[buildAnswerKey(item)])}
+                    t={t}
+                    onGenerate={onGenerateAnswer}
+                  />
+                ))}
               </div>
-              <div className="content-grid two-up">
+            </ShellCard>
+
+            <ShellCard title={t.prepPage.outputTitle} subtitle={pack?.fitReview?.summary || t.noPack}>
+              <div className="stacked-sections">
+                <div className="section-block">
+                  <h4>{t.prepPage.questionsTitle}</h4>
+                  <div className="qa-list">{pack.answerDrafts?.map((item, index) => (
+                    <article className="qa-item" key={`${item.cluster}-${index}`}>
+                      <div className="qa-head">
+                        <span className="pill solid">{item.cluster}</span>
+                        {item.supportingEvidence?.length ? <span className="mini-note">{item.supportingEvidence.length} {t.prepPage.evidenceDirect}</span> : null}
+                      </div>
+                      <h5>{item.question}</h5>
+                      <p><strong>{t.prepPage.whyAsked}:</strong> {item.whyAsked}</p>
+                      <p><strong>{t.prepPage.strategy}:</strong> {item.answerStrategy}</p>
+                    </article>
+                  ))}</div>
+                </div>
+
+                <div className="section-block">
+                  <h4>{t.prepPage.risksTitle}</h4>
+                  <div className="risk-list">{pack.resumeRisks?.map((item, index) => (
+                    <article className="risk-item" key={`${item.resumePoint}-${index}`}>
+                      <strong>{item.resumePoint}</strong>
+                      <p>{item.risk}</p>
+                      <small>{item.fix}</small>
+                    </article>
+                  ))}</div>
+                </div>
+
+                <div className="section-block">
+                  <h4>{t.prepPage.roundTitle}</h4>
+                  {pack.roundPlan?.map((round) => (
+                    <article className="round-card" key={round.round}>
+                      <strong>{round.round}</strong>
+                      <p>{round.focus}</p>
+                      <ul className="bullet-list">{round.questions?.map((question) => <li key={question}>{question}</li>)}</ul>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="section-block">
+                  <h4>{t.prepPage.cheatTitle}</h4>
+                  <div className="info-card emphasis-card">
+                    <strong>{pack.cheatSheet?.selfIntro}</strong>
+                  </div>
+                  <div className="content-grid two-up">
+                    <article className="info-card">
+                      <h5>{t.prepPage.storyAnchors}</h5>
+                      <ul className="bullet-list">{pack.cheatSheet?.storyAnchors?.map((item) => <li key={item}>{item}</li>)}</ul>
+                    </article>
+                    <article className="info-card">
+                      <h5>{t.prepPage.actions}</h5>
+                      <ul className="bullet-list">{pack.cheatSheet?.mustRemember?.map((item) => <li key={item}>{item}</li>)}</ul>
+                    </article>
+                  </div>
+                  <div className="info-card">
+                    <h5>{t.prepPage.summaryLabel}</h5>
+                    <ul className="bullet-list">{pack.cheatSheet?.closingQuestions?.map((item) => <li key={item}>{item}</li>)}</ul>
+                  </div>
+                </div>
+              </div>
+            </ShellCard>
+          </>
+        ) : null}
+      </div>
+
+      <aside className="prep-rail">
+        <div className="prep-rail-sticky">
+          <ShellCard
+            title={t.prepPage.fitTitle}
+            subtitle={pack?.fitReview?.summary || t.prepPage.summaryHint}
+            actions={pack ? <button type="button" className="secondary-button" onClick={onDownloadDoc}>{t.prepPage.downloadDoc}</button> : null}
+          >
+            {!pack ? <p className="empty-copy">{t.noPack}</p> : (
+              <div className="prep-rail-stack">
+                <div className="score-strip">
+                  <strong>{pack.fitReview?.overallScore ?? '—'}</strong>
+                  <span>{pack.fitReview?.summary}</span>
+                </div>
+
+                <div className="keyword-grid rail-grid">
+                  <div className="keyword-block">
+                    <h5>{t.prepPage.matchedKeywords}</h5>
+                    <div className="pill-row">
+                      {(pack.fitReview?.matchedKeywords || []).map((item) => <span key={item} className="pill solid">{item}</span>)}
+                    </div>
+                  </div>
+                  <div className="keyword-block">
+                    <h5>{t.prepPage.missingKeywords}</h5>
+                    <div className="pill-row">
+                      {(pack.fitReview?.missingKeywords || []).map((item) => <span key={item} className="pill danger">{item}</span>)}
+                    </div>
+                  </div>
+                </div>
+
                 <article className="info-card">
-                  <h5>{t.prepPage.storyAnchors}</h5>
-                  <ul className="bullet-list">{pack.cheatSheet?.storyAnchors?.map((item) => <li key={item}>{item}</li>)}</ul>
+                  <h5>{t.prepPage.sourceStatus}</h5>
+                  <div className="source-status-grid compact-grid">
+                    {(currentCrawlerStatus?.sources || []).map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={form.language} />)}
+                  </div>
+                  {!evidenceMeta?.directCount && evidenceMeta?.searchFallbackCount ? <div className="status-banner warning">{t.prepPage.scrapeDisabled}</div> : null}
                 </article>
+
                 <article className="info-card">
                   <h5>{t.prepPage.actions}</h5>
-                  <ul className="bullet-list">{pack.cheatSheet?.mustRemember?.map((item) => <li key={item}>{item}</li>)}</ul>
+                  <ul className="bullet-list">
+                    {(pack.fitReview?.nextActions || []).map((item) => <li key={item}>{item}</li>)}
+                  </ul>
+                </article>
+
+                <article className="info-card">
+                  <h5>{t.prepPage.aiStatus}</h5>
+                  <div className="pill-row">
+                    <span className={`pill ${aiReady ? 'solid' : 'danger'}`}>{aiReady ? t.prepPage.aiReady : t.prepPage.aiFallback}</span>
+                    <span className="pill">{answers.length} {t.prepPage.answerCount}</span>
+                  </div>
+                  <p>{aiStatus?.model || t.prepPage.aiFallbackHint}</p>
                 </article>
               </div>
-              <div className="info-card">
-                <h5>{t.prepPage.summaryLabel}</h5>
-                <ul className="bullet-list">{pack.cheatSheet?.closingQuestions?.map((item) => <li key={item}>{item}</li>)}</ul>
-              </div>
-            </div>
-          </div>
-        )}
-      </ShellCard>
+            )}
+          </ShellCard>
+        </div>
+      </aside>
     </div>
   )
 }
 
-function EvidencePage({ t, insights, pack, scrapeState, crawlerStatus, language }) {
+function EvidencePage({ t, insights, scrapeState, crawlerStatus, language }) {
   const directCount = insights.filter((item) => item.referenceUrl).length
   const fallbackCount = insights.filter((item) => !item.referenceUrl && item.referenceSearchUrl).length
-  const rewriteRows = buildRewriteRows(scrapeState)
   const currentCrawlerStatus = scrapeState?.crawlerStatus || crawlerStatus
 
   return (
     <div className="page-grid one-column">
       <ShellCard title={t.evidencePage.title} subtitle={t.evidencePage.subtitle}>
-        {(currentCrawlerStatus?.sources || []).length ? (
-          <div className="section-block">
-            <h4>{t.evidencePage.statusTitle}</h4>
-            <div className="source-status-grid">
-              {currentCrawlerStatus.sources.map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={language} />)}
-            </div>
-          </div>
-        ) : null}
+        {(currentCrawlerStatus?.sources || []).length ? <div className="source-status-grid compact-grid evidence-status-strip">
+          {currentCrawlerStatus.sources.map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={language} />)}
+        </div> : null}
 
-        {rewriteRows.length ? <RewriteNote rows={rewriteRows} t={t} /> : null}
-
-        {pack?.evidence?.meta?.warnings?.length ? <div className="status-banner warning">{t.evidencePage.warnings}: {pack.evidence.meta.warnings.join(' | ')}</div> : null}
+        {currentCrawlerStatus && !currentCrawlerStatus.liveScrapeAvailable ? <div className="status-banner warning">{t.evidencePage.browserFallback}</div> : null}
+        {fallbackCount ? <div className="status-banner warning">{t.evidencePage.fallbackMode}</div> : null}
 
         {insights.length ? (
           <>
@@ -792,7 +1045,6 @@ function EvidencePage({ t, insights, pack, scrapeState, crawlerStatus, language 
               <span className="pill solid">{directCount} {t.evidencePage.directBadge}</span>
               <span className="pill">{fallbackCount} {t.evidencePage.fallbackBadge}</span>
             </div>
-            {fallbackCount ? <div className="status-banner warning">{t.evidencePage.fallbackMode}</div> : null}
             <div className="evidence-grid">{insights.map((item, index) => (
               <article className="evidence-card" key={`${item.title || item.question}-${index}`}>
                 <div className="evidence-top">
@@ -818,6 +1070,8 @@ function EvidencePage({ t, insights, pack, scrapeState, crawlerStatus, language 
             ))}</div>
           </>
         ) : <p className="empty-copy">{t.evidencePage.noData}</p>}
+
+        {SHOW_DEBUG_PANEL ? <DiagnosticsPanel scrapeState={scrapeState} crawlerStatus={currentCrawlerStatus} t={t} /> : null}
       </ShellCard>
     </div>
   )
@@ -854,9 +1108,14 @@ function AppInner() {
   const [pack, setPack] = useState(null)
   const [scrapeState, setScrapeState] = useState(null)
   const [crawlerStatus, setCrawlerStatus] = useState(null)
+  const [aiStatus, setAiStatus] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generateError, setGenerateError] = useState('')
   const [parseError, setParseError] = useState('')
+  const [answerBook, setAnswerBook] = useState({})
+  const [answerLoadingMap, setAnswerLoadingMap] = useState({})
+  const [batchGenerating, setBatchGenerating] = useState(false)
+  const [answerOptions, setAnswerOptions] = useState({ tone: 'natural', answerLength: 'standard' })
   const [feedback, setFeedback] = useState(defaultFeedback)
   const [feedbackState, setFeedbackState] = useState('')
   const [bootstrap, setBootstrap] = useState(defaultBootstrap)
@@ -870,6 +1129,7 @@ function AppInner() {
       const next = json.data || defaultBootstrap
       setBootstrap(next)
       if (next.crawlerStatus) setCrawlerStatus(next.crawlerStatus)
+      if (next.aiStatus) setAiStatus(next.aiStatus)
     } catch {
       setBootstrap(defaultBootstrap)
     }
@@ -924,18 +1184,91 @@ function AppInner() {
       setPack(json.data)
       setScrapeState(json.scrape || null)
       setInsights(json.data?.evidence?.items || json.retrieval?.matches || [])
+      setAnswerBook({})
+      setAnswerLoadingMap({})
       if (json.resumeProfile) {
         setResumeProfile(json.resumeProfile)
         setForm((prev) => ({ ...prev, resume: json.resumeProfile.rawText || payload.resume }))
       }
       if (json.scrape?.crawlerStatus) setCrawlerStatus(json.scrape.crawlerStatus)
+      if (json.aiStatus) setAiStatus(json.aiStatus)
       setFeedback((prev) => ({ ...prev, company: payload.company, role: payload.role, interviewType: payload.interviewType }))
       await refreshBootstrap()
     } catch (error) {
       setPack(null)
-      setGenerateError(error.message || t.errors.generate)
+      setGenerateError(cleanUiMessage(error.message || t.errors.generate))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleGenerateAnswer(item) {
+    const key = buildAnswerKey(item)
+    setAnswerLoadingMap((prev) => ({ ...prev, [key]: true }))
+
+    try {
+      const payload = {
+        ...form,
+        resume: form.resume || resumeProfile?.rawText || '',
+        question: item.question,
+        questionPlan: item,
+        answerLanguage: form.language,
+        answerLength: answerOptions.answerLength,
+        tone: answerOptions.tone,
+        evidence: pack?.evidence?.items || insights || []
+      }
+
+      const res = await fetch(apiUrl('/api/interview/answers/generate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok || !json.data) throw new Error(json.message || t.errors.answerGenerate)
+
+      setAnswerBook((prev) => ({ ...prev, [key]: { cluster: item.cluster, ...json.data } }))
+      if (json.aiStatus) setAiStatus(json.aiStatus)
+    } catch (error) {
+      setGenerateError(cleanUiMessage(error.message || t.errors.answerGenerate))
+    } finally {
+      setAnswerLoadingMap((prev) => ({ ...prev, [key]: false }))
+    }
+  }
+
+  async function handleGenerateAllAnswers() {
+    if (!pack?.answerDrafts?.length) return
+    setBatchGenerating(true)
+    setGenerateError('')
+
+    try {
+      const payload = {
+        ...form,
+        resume: form.resume || resumeProfile?.rawText || '',
+        questions: pack.answerDrafts,
+        answerLanguage: form.language,
+        answerLength: answerOptions.answerLength,
+        tone: answerOptions.tone,
+        evidence: pack?.evidence?.items || insights || []
+      }
+
+      const res = await fetch(apiUrl('/api/interview/answers/batch'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const json = await res.json()
+      if (!res.ok || !json.ok || !json.data) throw new Error(json.message || t.errors.answerGenerate)
+
+      const nextAnswers = {}
+      for (const item of json.data.items || []) {
+        nextAnswers[buildAnswerKey(item)] = item
+      }
+      setAnswerBook(nextAnswers)
+      if (json.aiStatus) setAiStatus(json.aiStatus)
+    } catch (error) {
+      setGenerateError(cleanUiMessage(error.message || t.errors.answerGenerate))
+    } finally {
+      setBatchGenerating(false)
     }
   }
 
@@ -964,6 +1297,7 @@ function AppInner() {
   function switchLanguage(language) {
     setForm((prev) => ({ ...prev, language }))
     setPack(null)
+    setAnswerBook({})
     setGenerateError('')
     setParseError('')
   }
@@ -987,8 +1321,8 @@ function AppInner() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage t={t} pack={pack} insights={insights} bootstrap={bootstrap} />} />
           <Route path="/resume" element={<ResumePage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} setResumeProfile={setResumeProfile} resumePaste={resumePaste} setResumePaste={setResumePaste} parseError={parseError} setParseError={setParseError} />} />
-          <Route path="/prep" element={<PrepPage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} pack={pack} insights={insights} scrapeState={scrapeState} crawlerStatus={crawlerStatus} loading={loading} generateError={generateError} onGenerate={handleGenerate} onDownloadDoc={() => downloadCheatSheetDoc({ form, pack, resumeProfile })} />} />
-          <Route path="/evidence" element={<EvidencePage t={t} insights={insights} pack={pack} scrapeState={scrapeState} crawlerStatus={crawlerStatus} language={form.language} />} />
+          <Route path="/prep" element={<PrepPage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} pack={pack} scrapeState={scrapeState} crawlerStatus={crawlerStatus} aiStatus={aiStatus} loading={loading} generateError={generateError} answerBook={answerBook} answerLoadingMap={answerLoadingMap} batchGenerating={batchGenerating} answerOptions={answerOptions} setAnswerOptions={setAnswerOptions} onGenerate={handleGenerate} onGenerateAnswer={handleGenerateAnswer} onGenerateAllAnswers={handleGenerateAllAnswers} onDownloadDoc={() => downloadCheatSheetDoc({ form, pack, resumeProfile, answerBook })} />} />
+          <Route path="/evidence" element={<EvidencePage t={t} insights={insights} scrapeState={scrapeState} crawlerStatus={crawlerStatus} language={form.language} />} />
           <Route path="/review" element={<ReviewPage t={t} feedback={feedback} setFeedback={setFeedback} feedbackState={feedbackState} onSubmit={handleFeedbackSubmit} />} />
         </Routes>
       </div>
