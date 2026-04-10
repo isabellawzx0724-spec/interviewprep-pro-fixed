@@ -5,7 +5,16 @@ import { parseResumeText } from './resumeService.js'
 const openaiClient = process.env.OPENAI_API_KEY ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null
 const openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
 const anthropicModel = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest'
-const aiProvider = String(process.env.AI_PROVIDER || (process.env.OPENAI_API_KEY ? 'openai' : (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'disabled'))).toLowerCase()
+
+function resolveAiProvider() {
+  const explicit = String(process.env.AI_PROVIDER || '').trim().toLowerCase()
+  if (explicit) return explicit
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (process.env.OPENAI_API_KEY) return 'openai'
+  return 'disabled'
+}
+
+const aiProvider = resolveAiProvider()
 const answerGenerationEnabled = process.env.AI_ANSWER_ENABLED !== 'false'
 
 const EN_STOP = new Set(['and', 'with', 'for', 'the', 'your', 'from', 'that', 'this', 'into', 'about', 'role', 'job', 'work', 'team', 'teams', 'support', 'good', 'strong'])

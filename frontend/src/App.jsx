@@ -83,7 +83,7 @@ function flattenAnswerBook(answerBook = {}) {
 }
 
 function buildCheatSheetDoc({ form, pack, resumeProfile, answerBook }) {
-  const title = `${form.company || 'Interview'}-${form.role || 'Prep'}-cheatsheet`
+  const title = `${form.company || 'Interview'}-${form.role || 'self-intro'}`
   const answers = flattenAnswerBook(answerBook)
   const html = `
   <html>
@@ -100,43 +100,24 @@ function buildCheatSheetDoc({ form, pack, resumeProfile, answerBook }) {
       </style>
     </head>
     <body>
-      <h1>${escapeHtml(form.company || 'Interview Prep')} / ${escapeHtml(form.role || 'Target Role')}</h1>
+      <h1>${escapeHtml(form.company || 'Interview')} / ${escapeHtml(form.role || 'Target Role')}</h1>
       <p class="muted">Generated from Interview Navigator</p>
 
       <div class="section">
-        <h2>Fit Summary</h2>
+        <h2>Opening Self-Introduction</h2>
         <div class="card">
-          <strong>${escapeHtml(String(pack?.fitReview?.overallScore ?? '—'))}/100</strong>
-          <p>${escapeHtml(pack?.fitReview?.summary || '')}</p>
+          <p>${escapeHtml(pack?.cheatSheet?.selfIntro || '')}</p>
         </div>
       </div>
 
       <div class="section">
-        <h2>Self Intro</h2>
-        <div class="card">${escapeHtml(pack?.cheatSheet?.selfIntro || '')}</div>
-      </div>
-
-      <div class="section">
-        <h2>Story Anchors</h2>
+        <h2>Story Anchors for Intro</h2>
         <ul>${buildDocList(pack?.cheatSheet?.storyAnchors || resumeProfile?.recommendedHighlights || [])}</ul>
       </div>
 
       <div class="section">
-        <h2>Must Remember</h2>
+        <h2>What to Emphasize</h2>
         <ul>${buildDocList(pack?.cheatSheet?.mustRemember || [])}</ul>
-      </div>
-
-      <div class="section">
-        <h2>Targeted Questions</h2>
-        ${(pack?.answerDrafts || []).map((item) => `
-          <div class="card">
-            <h3>${escapeHtml(item.cluster || '')}</h3>
-            <p><strong>Question:</strong> ${escapeHtml(item.question || '')}</p>
-            <p><strong>Why asked:</strong> ${escapeHtml(item.whyAsked || '')}</p>
-            <p><strong>Strategy:</strong> ${escapeHtml(item.answerStrategy || '')}</p>
-            <p><strong>Draft:</strong> ${escapeHtml(item.sampleAnswer || '')}</p>
-          </div>
-        `).join('')}
       </div>
 
       ${answers.length ? `
@@ -152,28 +133,12 @@ function buildCheatSheetDoc({ form, pack, resumeProfile, answerBook }) {
           </div>
         `).join('')}
       </div>` : ''}
-
-      <div class="section">
-        <h2>Resume Rewrite Priorities</h2>
-        ${(pack?.resumeRisks || []).map((item) => `
-          <div class="card">
-            <p><strong>Line:</strong> ${escapeHtml(item.resumePoint || '')}</p>
-            <p><strong>Risk:</strong> ${escapeHtml(item.risk || '')}</p>
-            <p><strong>Fix:</strong> ${escapeHtml(item.fix || '')}</p>
-          </div>
-        `).join('')}
-      </div>
-
-      <div class="section">
-        <h2>Closing Questions</h2>
-        <ul>${buildDocList(pack?.cheatSheet?.closingQuestions || [])}</ul>
-      </div>
     </body>
   </html>
   `
 
   return {
-    fileName: `${slugify(title) || 'interview-cheatsheet'}.doc`,
+    fileName: `${slugify(title) || 'interview-self-intro'}.doc`,
     html
   }
 }
@@ -304,14 +269,17 @@ function Field({ label, children, full }) {
   )
 }
 
-function PageNav({ t }) {
+function PageNav({ t, showEvidencePage }) {
   const items = [
     ['/dashboard', t.pages.dashboard],
     ['/resume', t.pages.resume],
     ['/prep', t.pages.prep],
-    ['/evidence', t.pages.evidence],
     ['/review', t.pages.review]
   ]
+
+  if (showEvidencePage) {
+    items.splice(3, 0, ['/evidence', t.pages.evidence])
+  }
 
   return (
     <nav className="sidebar-nav">
@@ -784,7 +752,6 @@ function PrepPage({
   setForm,
   resumeProfile,
   pack,
-  scrapeState,
   crawlerStatus,
   aiStatus,
   loading,
@@ -799,10 +766,9 @@ function PrepPage({
   onGenerateAllAnswers,
   onDownloadDoc
 }) {
-  const evidenceMeta = pack?.evidence?.meta || {}
-  const currentCrawlerStatus = scrapeState?.crawlerStatus || crawlerStatus
-  const answers = flattenAnswerBook(answerBook)
+  const answersCount = flattenAnswerBook(answerBook).length
   const aiReady = aiStatus?.answerGenerationEnabled && aiStatus?.configured
+  const crawlerUnavailable = Boolean(crawlerStatus && !crawlerStatus.liveScrapeAvailable)
 
   return (
     <div className="prep-layout">
@@ -849,6 +815,28 @@ function PrepPage({
 
         {pack ? (
           <>
+            <ShellCard title={t.prepPage.fitTitle} subtitle={pack?.fitReview?.summary || t.prepPage.summaryHint}>
+              <div className="score-strip">
+                <strong>{pack.fitReview?.overallScore ?? '—'}</strong>
+                <span>{pack.fitReview?.summary}</span>
+              </div>
+              <div className="keyword-grid rail-grid">
+                <div className="keyword-block">
+                  <h5>{t.prepPage.matchedKeywords}</h5>
+                  <div className="pill-row">
+                    {(pack.fitReview?.matchedKeywords || []).map((item) => <span key={item} className="pill solid">{item}</span>)}
+                  </div>
+                </div>
+                <div className="keyword-block">
+                  <h5>{t.prepPage.missingKeywords}</h5>
+                  <div className="pill-row">
+                    {(pack.fitReview?.missingKeywords || []).map((item) => <span key={item} className="pill danger">{item}</span>)}
+                  </div>
+                </div>
+              </div>
+              {crawlerUnavailable ? <div className="status-banner warning">{t.prepPage.scrapeUnavailableReason}</div> : null}
+            </ShellCard>
+
             <ShellCard
               title={t.prepPage.answerTitle}
               subtitle={t.prepPage.answerSubtitle}
@@ -881,9 +869,7 @@ function PrepPage({
                   <small>{aiStatus?.model || '—'}</small>
                 </div>
               </div>
-
               {!aiReady ? <div className="status-banner warning">{t.prepPage.aiFallbackHint}</div> : null}
-
               <div className="answer-list">
                 {(pack.answerDrafts || []).map((item) => (
                   <AnswerOutputCard
@@ -898,128 +884,28 @@ function PrepPage({
               </div>
             </ShellCard>
 
-            <ShellCard title={t.prepPage.outputTitle} subtitle={pack?.fitReview?.summary || t.noPack}>
-              <div className="stacked-sections">
-                <div className="section-block">
-                  <h4>{t.prepPage.questionsTitle}</h4>
-                  <div className="qa-list">{pack.answerDrafts?.map((item, index) => (
-                    <article className="qa-item" key={`${item.cluster}-${index}`}>
-                      <div className="qa-head">
-                        <span className="pill solid">{item.cluster}</span>
-                        {item.supportingEvidence?.length ? <span className="mini-note">{item.supportingEvidence.length} {t.prepPage.evidenceDirect}</span> : null}
-                      </div>
-                      <h5>{item.question}</h5>
-                      <p><strong>{t.prepPage.whyAsked}:</strong> {item.whyAsked}</p>
-                      <p><strong>{t.prepPage.strategy}:</strong> {item.answerStrategy}</p>
-                    </article>
-                  ))}</div>
-                </div>
-
-                <div className="section-block">
-                  <h4>{t.prepPage.risksTitle}</h4>
-                  <div className="risk-list">{pack.resumeRisks?.map((item, index) => (
-                    <article className="risk-item" key={`${item.resumePoint}-${index}`}>
-                      <strong>{item.resumePoint}</strong>
-                      <p>{item.risk}</p>
-                      <small>{item.fix}</small>
-                    </article>
-                  ))}</div>
-                </div>
-
-                <div className="section-block">
-                  <h4>{t.prepPage.roundTitle}</h4>
-                  {pack.roundPlan?.map((round) => (
-                    <article className="round-card" key={round.round}>
-                      <strong>{round.round}</strong>
-                      <p>{round.focus}</p>
-                      <ul className="bullet-list">{round.questions?.map((question) => <li key={question}>{question}</li>)}</ul>
-                    </article>
-                  ))}
-                </div>
-
-                <div className="section-block">
-                  <h4>{t.prepPage.cheatTitle}</h4>
-                  <div className="info-card emphasis-card">
-                    <strong>{pack.cheatSheet?.selfIntro}</strong>
-                  </div>
-                  <div className="content-grid two-up">
-                    <article className="info-card">
-                      <h5>{t.prepPage.storyAnchors}</h5>
-                      <ul className="bullet-list">{pack.cheatSheet?.storyAnchors?.map((item) => <li key={item}>{item}</li>)}</ul>
-                    </article>
-                    <article className="info-card">
-                      <h5>{t.prepPage.actions}</h5>
-                      <ul className="bullet-list">{pack.cheatSheet?.mustRemember?.map((item) => <li key={item}>{item}</li>)}</ul>
-                    </article>
-                  </div>
-                  <div className="info-card">
-                    <h5>{t.prepPage.summaryLabel}</h5>
-                    <ul className="bullet-list">{pack.cheatSheet?.closingQuestions?.map((item) => <li key={item}>{item}</li>)}</ul>
-                  </div>
-                </div>
+            <ShellCard
+              title={t.prepPage.cheatTitle}
+              subtitle={t.prepPage.selfIntroHint}
+              actions={<button type="button" className="secondary-button" onClick={onDownloadDoc}>{t.prepPage.downloadDoc}</button>}
+            >
+              <div className="info-card emphasis-card">
+                <strong>{pack.cheatSheet?.selfIntro || '—'}</strong>
+              </div>
+              <div className="content-grid two-up">
+                <article className="info-card">
+                  <h5>{t.prepPage.storyAnchors}</h5>
+                  <ul className="bullet-list">{pack.cheatSheet?.storyAnchors?.map((item) => <li key={item}>{item}</li>)}</ul>
+                </article>
+                <article className="info-card">
+                  <h5>{t.prepPage.actions}</h5>
+                  <ul className="bullet-list">{pack.cheatSheet?.mustRemember?.map((item) => <li key={item}>{item}</li>)}</ul>
+                </article>
               </div>
             </ShellCard>
           </>
         ) : null}
       </div>
-
-      <aside className="prep-rail">
-        <div className="prep-rail-sticky">
-          <ShellCard
-            title={t.prepPage.fitTitle}
-            subtitle={pack?.fitReview?.summary || t.prepPage.summaryHint}
-            actions={pack ? <button type="button" className="secondary-button" onClick={onDownloadDoc}>{t.prepPage.downloadDoc}</button> : null}
-          >
-            {!pack ? <p className="empty-copy">{t.noPack}</p> : (
-              <div className="prep-rail-stack">
-                <div className="score-strip">
-                  <strong>{pack.fitReview?.overallScore ?? '—'}</strong>
-                  <span>{pack.fitReview?.summary}</span>
-                </div>
-
-                <div className="keyword-grid rail-grid">
-                  <div className="keyword-block">
-                    <h5>{t.prepPage.matchedKeywords}</h5>
-                    <div className="pill-row">
-                      {(pack.fitReview?.matchedKeywords || []).map((item) => <span key={item} className="pill solid">{item}</span>)}
-                    </div>
-                  </div>
-                  <div className="keyword-block">
-                    <h5>{t.prepPage.missingKeywords}</h5>
-                    <div className="pill-row">
-                      {(pack.fitReview?.missingKeywords || []).map((item) => <span key={item} className="pill danger">{item}</span>)}
-                    </div>
-                  </div>
-                </div>
-
-                <article className="info-card">
-                  <h5>{t.prepPage.sourceStatus}</h5>
-                  <div className="source-status-grid compact-grid">
-                    {(currentCrawlerStatus?.sources || []).map((source) => <SourceStatusCard key={source.key || source.source} source={source} t={t} language={form.language} />)}
-                  </div>
-                  {!evidenceMeta?.directCount && evidenceMeta?.searchFallbackCount ? <div className="status-banner warning">{t.prepPage.scrapeDisabled}</div> : null}
-                </article>
-
-                <article className="info-card">
-                  <h5>{t.prepPage.actions}</h5>
-                  <ul className="bullet-list">
-                    {(pack.fitReview?.nextActions || []).map((item) => <li key={item}>{item}</li>)}
-                  </ul>
-                </article>
-
-                <article className="info-card">
-                  <h5>{t.prepPage.aiStatus}</h5>
-                  <div className="pill-row">
-                    <span className={`pill ${aiReady ? 'solid' : 'danger'}`}>{aiReady ? t.prepPage.aiReady : t.prepPage.aiFallback}</span>
-                    <span className="pill">{answers.length} {t.prepPage.answerCount}</span>
-                  </div>
-                  <p>{aiStatus?.model || t.prepPage.aiFallbackHint}</p>
-                </article>
-              </div>
-            )}
-          </ShellCard>
-        </div>
-      </aside>
     </div>
   )
 }
@@ -1121,6 +1007,7 @@ function AppInner() {
   const [bootstrap, setBootstrap] = useState(defaultBootstrap)
 
   const t = useMemo(() => copy[form.language], [form.language])
+  const showEvidencePage = Boolean(crawlerStatus?.liveScrapeAvailable || insights.some((item) => item?.referenceUrl))
 
   async function refreshBootstrap() {
     try {
@@ -1312,7 +1199,7 @@ function AppInner() {
             <p>{t.tagline}</p>
           </div>
         </div>
-        <PageNav t={t} />
+        <PageNav t={t} showEvidencePage={showEvidencePage} />
         <LanguageSwitch language={form.language} onChange={switchLanguage} t={t} />
       </aside>
 
@@ -1322,7 +1209,11 @@ function AppInner() {
           <Route path="/dashboard" element={<DashboardPage t={t} pack={pack} insights={insights} bootstrap={bootstrap} />} />
           <Route path="/resume" element={<ResumePage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} setResumeProfile={setResumeProfile} resumePaste={resumePaste} setResumePaste={setResumePaste} parseError={parseError} setParseError={setParseError} />} />
           <Route path="/prep" element={<PrepPage t={t} form={form} setForm={setForm} resumeProfile={resumeProfile} pack={pack} scrapeState={scrapeState} crawlerStatus={crawlerStatus} aiStatus={aiStatus} loading={loading} generateError={generateError} answerBook={answerBook} answerLoadingMap={answerLoadingMap} batchGenerating={batchGenerating} answerOptions={answerOptions} setAnswerOptions={setAnswerOptions} onGenerate={handleGenerate} onGenerateAnswer={handleGenerateAnswer} onGenerateAllAnswers={handleGenerateAllAnswers} onDownloadDoc={() => downloadCheatSheetDoc({ form, pack, resumeProfile, answerBook })} />} />
-          <Route path="/evidence" element={<EvidencePage t={t} insights={insights} scrapeState={scrapeState} crawlerStatus={crawlerStatus} language={form.language} />} />
+          {showEvidencePage ? (
+            <Route path="/evidence" element={<EvidencePage t={t} insights={insights} scrapeState={scrapeState} crawlerStatus={crawlerStatus} language={form.language} />} />
+          ) : (
+            <Route path="/evidence" element={<Navigate to="/prep" replace />} />
+          )}
           <Route path="/review" element={<ReviewPage t={t} feedback={feedback} setFeedback={setFeedback} feedbackState={feedbackState} onSubmit={handleFeedbackSubmit} />} />
         </Routes>
       </div>

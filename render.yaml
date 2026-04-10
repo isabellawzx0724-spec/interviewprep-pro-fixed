@@ -24,7 +24,7 @@ services:
       - key: SCRAPE_TIMEOUT_MS
         value: "15000"
       - key: AI_PROVIDER
-        value: "openai"
+        value: "anthropic"
       - key: RESUME_AI_PROVIDER
         value: "anthropic"
       - key: AI_ANSWER_ENABLED
